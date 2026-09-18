@@ -43,3 +43,6 @@ claudios_prosper_ai = ["prompts/*.yaml"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "scripts"]
 testpaths = ["tests"]
+
+[tool.ty.environment]
+extra-paths = ["scripts"]

@@ -15,7 +15,7 @@ class BackgroundServer:
         self._server = uvicorn.Server(
             uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
         )
-        self._task = None
+        self._task: asyncio.Task[None] | None = None
         self.port = None
 
     async def __aenter__(self):
@@ -31,6 +31,7 @@ class BackgroundServer:
 
     async def __aexit__(self, *exc):
         self._server.should_exit = True
+        assert self._task is not None
         await asyncio.wait_for(self._task, timeout=10)
 
     @property
