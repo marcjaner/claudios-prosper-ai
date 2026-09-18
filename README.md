@@ -22,7 +22,7 @@ Start the production transport with per-call Deepgram STT and user-turn
 aggregation:
 
 ```shell
-uv run uvicorn agent.server:app --host 0.0.0.0 --port 7860 --env-file .env
+PYTHONPATH=src uv run python -m agent
 ```
 
 Each completed caller turn is emitted from Pipecat's `on_user_turn_stopped`
@@ -62,7 +62,21 @@ transport can be exercised before there is an API key to dial the real one.
 Run the server with the echo agent, which needs no STT or TTS:
 
 ```shell
-uv run python -m twilio
+PYTHONPATH=src uv run python -m twilio
+```
+
+For an interactive local call, open [http://localhost:7860](http://localhost:7860)
+in a browser after starting the server. It uses your microphone and sends the
+same `connected`, `start`, `media`, and `stop` messages that Twilio Media
+Streams sends to `/ws`. Use headphones to prevent the agent's playback from
+feeding back into the microphone.
+
+The page also includes a read-only local database viewer. To see the sample
+storage data, seed it and point the server at that SQLite file:
+
+```shell
+PYTHONPATH=src uv run python scripts/storage_smoke.py
+DATABASE_URL=sqlite+aiosqlite:///data/storage-smoke.db PYTHONPATH=src uv run python -m twilio
 ```
 
 ```shell
