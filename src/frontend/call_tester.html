@@ -214,6 +214,10 @@
       }
 
       async function startCall() {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setStatus(`Microphone unavailable: the browser only allows it in a secure context.\nOpen this page at http://localhost:${location.port} or over HTTPS — not ${location.hostname}.`);
+          return;
+        }
         try {
           stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
           audioContext = new AudioContext();
