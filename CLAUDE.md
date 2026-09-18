@@ -25,6 +25,12 @@ This is a hackathon. **Ship working code fast; favor simplicity over completenes
 - Lint/format: **ruff**. Types: **ty**. Tests: **pytest**. Hooks: pre-commit.
 - Layout: `src/{agent,stt,tts,twilio,frontend}/`. Prompts live in `prompts/*.yaml`.
 
+## Docs
+
+- **Root `README.md` is only for how to run the whole project** — setup, env, and the command that starts the full pipeline. Nothing else goes there.
+- **Module-specific docs live in that module**, e.g. `src/stt/README.md` for the Deepgram smoke test, not the root README. If a note is about one module, it belongs beside that module's code.
+- Don't add a README for something that doesn't need one.
+
 ## Challenge reference
 
 `instructions/` has the full challenge context: `general.md` (rules, clinic, scoring, the 18 problems), `api.md` (platform + EHR endpoints), `diagram.md` (pipeline flow).
