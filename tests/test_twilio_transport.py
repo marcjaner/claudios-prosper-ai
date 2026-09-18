@@ -1,4 +1,6 @@
 import asyncio
+import json
+import wave
 
 import numpy as np
 import uvicorn
@@ -92,6 +94,40 @@ def test_withheld_caller_id_is_served():
 
     assert result.ok, result.error
     assert result.frames_received > 0
+
+
+def test_call_debug_bundle_has_synchronized_tracks(tmp_path, monkeypatch):
+    monkeypatch.setenv("CALL_RECORDINGS_DIR", str(tmp_path))
+
+    result = call_the_echo_agent(0.5, linger_seconds=0.2)
+
+    assert result.ok, result.error
+    bundle = tmp_path / result.call_id
+    metadata = json.loads((bundle / "metadata.json").read_text())
+    events = [
+        json.loads(line)
+        for line in (bundle / "timeline.jsonl").read_text().splitlines()
+    ]
+
+    assert metadata["outcome"] == "completed"
+    assert metadata["call_id"] == result.call_id
+    assert events[0]["event"] == "conversation_turn_started"
+    assert events[-1]["event"] == "conversation_turn_ended"
+
+    frame_counts = []
+    for name, channels in [
+        ("caller.wav", 1),
+        ("agent.wav", 1),
+        ("mixed.wav", 1),
+        ("stereo.wav", 2),
+    ]:
+        with wave.open(str(bundle / name), "rb") as audio:
+            assert audio.getnchannels() == channels
+            assert audio.getsampwidth() == 2
+            frame_counts.append(audio.getnframes())
+
+    assert len(set(frame_counts)) == 1
+    assert frame_counts[0] > 0
 
 
 def test_ten_concurrent_calls():

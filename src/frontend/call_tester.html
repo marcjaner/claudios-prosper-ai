@@ -250,13 +250,17 @@
 
       function endCall(sendStop = true) {
         if (!socket && !stream) return;
+        const endedCallSid = callSid;
         if (sendStop) send({ event: 'stop', sequenceNumber: String(sequence + 1), streamSid, stop: { callSid } });
         socket?.close(); socket = null;
         processor?.disconnect(); source?.disconnect();
         processor = null; source = null;
         stream?.getTracks().forEach(track => track.stop()); stream = null;
         clearPlayback(); audioContext?.close(); audioContext = null;
-        setCalling(false); setStatus('Call ended. Ready for another test.');
+        setCalling(false);
+        setStatus(endedCallSid
+          ? `Call ended.\ncallSid: ${endedCallSid}\nUse this ID to find its debug bundle.`
+          : 'Call ended. Ready for another test.');
       }
 
       startButton.addEventListener('click', startCall);
