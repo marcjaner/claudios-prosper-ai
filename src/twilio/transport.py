@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from loguru import logger
-from pipecat.frames.frames import AudioRawFrame, Frame
+from pipecat.frames.frames import Frame, OutputAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -65,7 +65,10 @@ class OutboundAudioTap(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        if isinstance(frame, AudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
+        if (
+            isinstance(frame, OutputAudioRawFrame)
+            and direction == FrameDirection.DOWNSTREAM
+        ):
             if self._call_metrics.first_audio_out_at is None:
                 self._call_metrics.first_audio_out_at = time.monotonic()
             self._call_metrics.audio_out_bytes += len(frame.audio)

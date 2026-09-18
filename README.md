@@ -16,6 +16,19 @@ uv run python scripts/stt_smoke.py path/to/audio.wav
 
 The smoke test requires `ffmpeg` on `PATH`.
 
+## Transcript server
+
+Start the production transport with per-call Deepgram STT and user-turn
+aggregation:
+
+```shell
+uv run uvicorn agent.server:app --host 0.0.0.0 --port 7860 --env-file .env
+```
+
+Each completed caller turn is emitted from Pipecat's `on_user_turn_stopped`
+event and currently logged with its `call_id`. This server is the transcript
+boundary for the future LLM layer; it intentionally has no TTS response yet.
+
 ## Twilio transport
 
 `src/twilio/` is the WebSocket server the harness dials. It owns the wire and
@@ -28,11 +41,13 @@ and output:
 ```python
 from twilio import CallMeta, create_app
 
+
 async def build_agent(meta: CallMeta):
     # meta.call_id      goes in every /api/v1/submit/* request
     # meta.from_number  may be None; a hint, never an identification
     # meta.connected_at Europe/Madrid; relative dates resolve against it
     return [stt, agent, tts]
+
 
 app = create_app(build_agent)
 ```
