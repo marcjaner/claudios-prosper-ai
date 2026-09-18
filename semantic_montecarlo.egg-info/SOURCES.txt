@@ -1,8 +1,0 @@
-README.md
-pyproject.toml
-semantic_montecarlo.egg-info/PKG-INFO
-semantic_montecarlo.egg-info/SOURCES.txt
-semantic_montecarlo.egg-info/dependency_links.txt
-semantic_montecarlo.egg-info/entry_points.txt
-semantic_montecarlo.egg-info/requires.txt
-semantic_montecarlo.egg-info/top_level.txt

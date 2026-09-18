@@ -1,2 +1,0 @@
-[console_scripts]
-semantic-montecarlo = semantic_montecarlo.cli:main

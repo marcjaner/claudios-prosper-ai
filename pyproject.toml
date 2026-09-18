@@ -1,5 +1,5 @@
 [project]
-name = "semantic-montecarlo"
+name = "claudios-prosper-ai"
 version = "0.1.0"
 description = "Sampling agents to estimate probability distributions from web searches"
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-semantic-montecarlo = "semantic_montecarlo.cli:main"
+claudios-prosper-ai = "claudios_prosper_ai.cli:main"
 
 [dependency-groups]
 dev = [
@@ -31,7 +31,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["semantic_montecarlo*"]
+include = ["claudios_prosper_ai*"]
 
 [tool.setuptools.package-data]
-semantic_montecarlo = ["prompts/*.yaml"]
+claudios_prosper_ai = ["prompts/*.yaml"]

@@ -1,0 +1,2 @@
+[console_scripts]
+claudios-prosper-ai = claudios_prosper_ai.cli:main
