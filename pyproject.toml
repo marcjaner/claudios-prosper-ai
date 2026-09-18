@@ -30,8 +30,11 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["claudios_prosper_ai*"]
+where = ["src"]
+include = ["agent*", "frontend*", "stt*", "twilio*", "tts*"]
+
+[tool.setuptools.package-dir]
+"" = "src"
 
 [tool.setuptools.package-data]
 claudios_prosper_ai = ["prompts/*.yaml"]
