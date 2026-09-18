@@ -11,7 +11,7 @@ from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
 
 PROVIDERS = ("cartesia", "deepgram")
-DEFAULT_PROVIDER = "cartesia"
+DEFAULT_PROVIDER = "deepgram"
 DEFAULT_LANGUAGE = "es"
 CARTESIA_MODEL = "sonic-3.6"
 # Peninsular Spanish, "calm, professional, customer service" per Deepgram's catalogue.
