@@ -1,0 +1,143 @@
+import asyncio
+import json
+import time
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+
+from loguru import logger
+from pipecat.frames.frames import AudioRawFrame, Frame
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.transports.websocket.fastapi import (
+    FastAPIWebsocketParams,
+    FastAPIWebsocketTransport,
+)
+from pipecat.workers.runner import WorkerRunner
+
+from .handshake import CallMeta, read_handshake
+from .serializer import create_serializer
+
+PIPELINE_SAMPLE_RATE = 16_000
+TTS_SAMPLE_RATE = 24_000
+# 20 ms out, matching the frames the harness sends in.
+AUDIO_OUT_10MS_CHUNKS = 2
+IDLE_TIMEOUT_SECONDS = 300
+MAX_CALL_SECONDS = 300
+
+# Builds the processors between transport input and output: STT, turn
+# detection, the agent, TTS. Called once per call; nothing it returns is shared.
+AgentFactory = Callable[[CallMeta], Awaitable[Sequence[FrameProcessor]]]
+
+
+@dataclass
+class CallMetrics:
+    call_id: str
+    started_at: float
+    first_audio_out_at: float | None = None
+    audio_out_bytes: int = 0
+
+    def log(self) -> None:
+        # Silence from us is attributed to us and fails the case, so time to
+        # first audio is the number worth watching on every call.
+        summary = {
+            "call_id": self.call_id,
+            "duration_seconds": round(time.monotonic() - self.started_at, 3),
+            "time_to_first_audio_seconds": (
+                None
+                if self.first_audio_out_at is None
+                else round(self.first_audio_out_at - self.started_at, 3)
+            ),
+            "audio_out_seconds": round(self.audio_out_bytes / (TTS_SAMPLE_RATE * 2), 3),
+        }
+        if self.first_audio_out_at is None:
+            logger.error("call said nothing | {}", json.dumps(summary))
+        else:
+            logger.info("call finished | {}", json.dumps(summary))
+
+
+class OutboundAudioTap(FrameProcessor):
+    def __init__(self, metrics: CallMetrics):
+        super().__init__()
+        # Not self._metrics: FrameProcessor owns that name for its own
+        # metrics and overwriting it makes the processor unusable at setup.
+        self._call_metrics = metrics
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, AudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
+            if self._call_metrics.first_audio_out_at is None:
+                self._call_metrics.first_audio_out_at = time.monotonic()
+            self._call_metrics.audio_out_bytes += len(frame.audio)
+        await self.push_frame(frame, direction)
+
+
+def create_transport(websocket, meta: CallMeta) -> FastAPIWebsocketTransport:
+    params = FastAPIWebsocketParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        add_wav_header=False,
+        serializer=create_serializer(meta.stream_sid, meta.call_id),
+        audio_out_10ms_chunks=AUDIO_OUT_10MS_CHUNKS,
+        # The harness is not a browser and sends no Origin header. Empty
+        # allows all; leaving it to the default would let
+        # PIPECAT_ALLOWED_ORIGINS in the environment reject every call.
+        allowed_origins=[],
+    )
+    return FastAPIWebsocketTransport(websocket=websocket, params=params)
+
+
+async def run_call(websocket, build_agent: AgentFactory) -> None:
+    await websocket.accept()
+
+    try:
+        meta = await read_handshake(websocket)
+    except Exception as error:  # noqa: BLE001 - a bad handshake fails one call, not the wave
+        logger.error("handshake failed: {}", error)
+        await websocket.close()
+        return
+
+    logger.info(
+        "call started | call_id={} from_number={}",
+        meta.call_id,
+        meta.from_number or "<withheld>",
+    )
+    metrics = CallMetrics(call_id=meta.call_id, started_at=time.monotonic())
+
+    try:
+        transport = create_transport(websocket, meta)
+        pipeline = Pipeline(
+            [
+                transport.input(),
+                *await build_agent(meta),
+                OutboundAudioTap(metrics),
+                transport.output(),
+            ]
+        )
+        worker = PipelineWorker(
+            pipeline,
+            params=PipelineParams(
+                audio_in_sample_rate=PIPELINE_SAMPLE_RATE,
+                audio_out_sample_rate=TTS_SAMPLE_RATE,
+            ),
+            idle_timeout_secs=IDLE_TIMEOUT_SECONDS,
+            cancel_on_idle_timeout=True,
+            cancel_runner_on_idle_timeout=False,
+        )
+
+        # Nothing tears the pipeline down when the caller hangs up. Without
+        # this the worker lives until the idle timeout, holding a socket and a
+        # pipeline for minutes, ten at a time during a Run All.
+        @transport.event_handler("on_client_disconnected")
+        async def _on_disconnect(_transport, _client):
+            await worker.cancel(reason="caller hung up")
+
+        runner = WorkerRunner(handle_sigint=False)
+        await runner.add_workers(worker)
+        await asyncio.wait_for(runner.run(), timeout=MAX_CALL_SECONDS)
+    except TimeoutError:
+        logger.error("call exceeded {}s | call_id={}", MAX_CALL_SECONDS, meta.call_id)
+    except Exception:  # noqa: BLE001 - one call must never take down the others
+        logger.exception("call failed | call_id={}", meta.call_id)
+    finally:
+        metrics.log()
