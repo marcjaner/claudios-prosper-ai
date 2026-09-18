@@ -1,19 +1,20 @@
 from collections.abc import Awaitable, Callable
 
 from loguru import logger
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+    LocalSmartTurnAnalyzerV3,
+)
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from stt import create_deepgram_stt
 from twilio import AgentFactory, CallMeta
-
-USER_SPEECH_TIMEOUT_SECONDS = 0.65
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 
@@ -27,8 +28,8 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
         vad_analyzer=SileroVADAnalyzer(),
         user_turn_strategies=UserTurnStrategies(
             stop=[
-                SpeechTimeoutUserTurnStopStrategy(
-                    user_speech_timeout=USER_SPEECH_TIMEOUT_SECONDS
+                TurnAnalyzerUserTurnStopStrategy(
+                    turn_analyzer=LocalSmartTurnAnalyzerV3()
                 )
             ]
         ),
