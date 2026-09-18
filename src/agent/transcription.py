@@ -14,7 +14,10 @@ from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from stt import create_deepgram_stt
+from tts import create_tts
 from twilio import AgentFactory, CallMeta
+
+from .hardcoded_reply import HardcodedReply
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 
@@ -48,11 +51,16 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
 
 def create_transcription_agent(
     on_completed_turn: CompletedTurnCallback = log_completed_turn,
+    reply: str | None = None,
 ) -> AgentFactory:
     async def build_agent(meta: CallMeta):
-        return [
+        processors = [
             create_deepgram_stt(),
             create_user_aggregator(meta, on_completed_turn),
         ]
+        if reply:
+            # Until the LLM exists: the same spoken answer to every turn.
+            processors += [HardcodedReply(reply), create_tts()]
+        return processors
 
     return build_agent

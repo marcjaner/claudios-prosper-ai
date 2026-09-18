@@ -14,7 +14,6 @@ PROVIDERS = ("cartesia", "deepgram")
 DEFAULT_PROVIDER = "cartesia"
 DEFAULT_LANGUAGE = "es"
 CARTESIA_MODEL = "sonic-3.6"
-# Peninsular Spanish, "calm, professional, customer service" per Deepgram's catalogue.
 DEEPGRAM_VOICE = "aura-2-nestor-es"
 
 
@@ -37,7 +36,6 @@ def _create_cartesia(env: Mapping[str, str]) -> TTSService:
         api_key=_require(env, "CARTESIA_API_KEY"),
         settings=CartesiaTTSService.Settings(
             model=env.get("TTS_MODEL", CARTESIA_MODEL),
-            # Cartesia voices are ids from their library; there is no sensible built-in default.
             voice=_require(env, "TTS_VOICE"),
             language=Language(env.get("TTS_LANGUAGE", DEFAULT_LANGUAGE)),
         ),
