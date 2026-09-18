@@ -1,7 +1,6 @@
 import os
 
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.transcriptions.language import Language
 
 DEEPGRAM_MODEL = "nova-3-general"
 
@@ -13,7 +12,7 @@ def create_deepgram_stt(api_key: str | None = None) -> DeepgramSTTService:
 
     settings = DeepgramSTTService.Settings(
         model=DEEPGRAM_MODEL,
-        language=Language.ES,
+        language="multi",
         interim_results=True,
         numerals=True,
         punctuate=True,
