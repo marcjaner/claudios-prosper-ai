@@ -16,6 +16,7 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat.workers.runner import WorkerRunner
 
 from .handshake import CallMeta, read_handshake
+from .recording import create_recorder
 from .serializer import create_serializer
 
 PIPELINE_SAMPLE_RATE = 16_000
@@ -109,12 +110,15 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
 
     try:
         transport = create_transport(websocket, meta)
+        # After transport.output(), where both directions of audio pass.
+        recorder = create_recorder(meta)
         pipeline = Pipeline(
             [
                 transport.input(),
                 *await build_agent(meta),
                 OutboundAudioTap(metrics),
                 transport.output(),
+                *([recorder] if recorder else []),
             ]
         )
         worker = PipelineWorker(
