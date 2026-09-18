@@ -1,0 +1,37 @@
+[project]
+name = "semantic-montecarlo"
+version = "0.1.0"
+description = "Sampling agents to estimate probability distributions from web searches"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "ferjorosa"}
+]
+dependencies = [
+    "openai>=2.30.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+semantic-montecarlo = "semantic_montecarlo.cli:main"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+    "pytest>=8.0.0",
+    "ruff>=0.14.14",
+    "ty>=0.0.14",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["semantic_montecarlo*"]
+
+[tool.setuptools.package-data]
+semantic_montecarlo = ["prompts/*.yaml"]
