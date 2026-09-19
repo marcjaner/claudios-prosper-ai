@@ -365,13 +365,13 @@ def _with_call_budget(prompt: str, seconds_remaining: int | None) -> str:
         return prompt
     if seconds_remaining <= 20:
         instruction = (
-            "Act immediately. If every required argument is known, call the final "
-            "action tool now. Otherwise ask once for all missing required details."
+            "Act immediately: submit only confirmed values; otherwise request "
+            "confirmation or all missing values."
         )
     elif seconds_remaining <= 45:
         instruction = (
-            "Time is short. Skip optional confirmations and explanations, and gather "
-            "the remaining required details in one manageable question."
+            "Time is short. Gather all missing details at once and keep the mandatory "
+            "read-back concise."
         )
     else:
         instruction = (
