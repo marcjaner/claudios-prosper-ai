@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -92,7 +93,8 @@ async def _observed_tool_completion(
     started_ns = time.perf_counter_ns()
     await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=model))
     try:
-        completion = client.complete_with_tools(
+        completion = await asyncio.to_thread(
+            client.complete_with_tools,
             _completion_prompt(prompt),
             [tool["definition"] for tool in tools.values()],
         )
@@ -137,7 +139,8 @@ async def _observed_completion(
     started_ns = time.perf_counter_ns()
     await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=model))
     try:
-        completion = client.complete_structured(
+        completion = await asyncio.to_thread(
+            client.complete_structured,
             _completion_prompt(prompt),
             AgentResponse,
             extra_body={"tools": [tool["definition"] for tool in tools.values()]},
@@ -269,7 +272,7 @@ async def run_agent_turn(
                 )
             else:
                 try:
-                    output = tool["execute"](**call.arguments)
+                    output = await asyncio.to_thread(tool["execute"], **call.arguments)
                 except (TypeError, ValueError) as exc:
                     await _emit_tool_error(
                         event_sink,
@@ -347,7 +350,7 @@ async def run_agent_turn(
             )
             yield follow_up
     finally:
-        api.close()
+        await asyncio.to_thread(api.close)
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:

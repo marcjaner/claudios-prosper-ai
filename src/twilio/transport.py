@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from loguru import logger
-from pipecat.frames.frames import Frame, OutputAudioRawFrame
+from pipecat.frames.frames import Frame, OutputAudioRawFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -100,7 +100,25 @@ def create_transport(websocket, meta: CallMeta) -> FastAPIWebsocketTransport:
     return FastAPIWebsocketTransport(websocket=websocket, params=params)
 
 
-async def run_call(websocket, build_agent: AgentFactory) -> None:
+def register_initial_greeting(
+    worker: PipelineWorker, initial_greeting: str | None
+) -> None:
+    if not initial_greeting:
+        return
+
+    @worker.event_handler("on_pipeline_started")
+    async def _on_pipeline_started(worker, _frame):
+        await worker.queue_frame(
+            TTSSpeakFrame(initial_greeting, append_to_context=False)
+        )
+
+
+async def run_call(
+    websocket,
+    build_agent: AgentFactory,
+    *,
+    initial_greeting: str | None = None,
+) -> None:
     await websocket.accept()
 
     try:
@@ -163,6 +181,7 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
         async def _on_disconnect(_transport, _client):
             await worker.cancel(reason="caller hung up")
 
+        register_initial_greeting(worker, initial_greeting)
         runner = WorkerRunner(handle_sigint=False)
         await runner.add_workers(worker)
         await asyncio.wait_for(runner.run(), timeout=MAX_CALL_SECONDS)
