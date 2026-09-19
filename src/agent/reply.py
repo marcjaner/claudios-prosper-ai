@@ -6,15 +6,19 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from observability.frames import TTSRequestedFrame
 
 from .agent import run_agent_turn
+from .call_context import CallContext
 
 logger = logging.getLogger(__name__)
 
 
 class AgentReply(FrameProcessor):
-    def __init__(self, call_id, repository):
+    def __init__(
+        self, call_id, repository, context: CallContext | None = None
+    ):
         super().__init__()
         self.call_id = call_id
         self.repository = repository
+        self.context = context or CallContext(call_id)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -34,6 +38,7 @@ class AgentReply(FrameProcessor):
                 content,
                 self.call_id,
                 self.repository,
+                context=self.context,
                 event_sink=self._emit_event,
             ):
                 logger.info(

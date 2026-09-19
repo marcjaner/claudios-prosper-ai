@@ -7,20 +7,19 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import yaml
 from pipecat.frames.frames import SystemFrame
 
+from agent.call_context import CallContext
 from agent.clinic_api import ClinicApi
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
-from agent.tools import create_clinic_tools, load_tools
+from agent.tools import ClinicTools, SubmissionRecord, create_clinic_tools, load_tools
 from agent.utils import configure_logging
-from agent.workflow import available_tools, update_state
-from agent.tools import create_clinic_tools, load_tools
-from agent.utils import configure_logging
+from agent.workflow import available_tools
 from observability.frames import (
     LLMRequestFailedFrame,
     LLMRequestStartedFrame,
@@ -44,6 +43,7 @@ SENSITIVE_ARGUMENT_MARKERS = {
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
 TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
+MAX_TOOL_ROUNDS = 3
 
 
 def retrieve_memory() -> str:
@@ -175,11 +175,11 @@ async def _observed_completion(
             cached_tokens=usage.cached_tokens,
         ),
     )
-    return completion.data
+    return cast(AgentResponse, completion.data)
 
 
-def _enabled_tools(tools: dict[str, Tool], state: dict[str, Any]) -> dict[str, Tool]:
-    enabled = available_tools(state)
+def _enabled_tools(tools: dict[str, Tool], context: CallContext) -> dict[str, Tool]:
+    enabled = available_tools(context)
     return {name: tool for name, tool in tools.items() if name in enabled}
 
 
@@ -193,9 +193,12 @@ def run_agent(
     configure_logging()
     if (clinic_api is None) != (call_id is None):
         raise ValueError("clinic_api and call_id must be provided together")
-    tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
-    state: dict[str, Any] = {}
-    tools = _enabled_tools(tools, state)
+    context = CallContext(call_id or "standalone")
+    context.begin_turn()
+    tools = load_tools(
+        create_clinic_tools(clinic_api, context.call_id, context) if clinic_api else []
+    )
+    tools = _enabled_tools(tools, context)
     response = _completion(prompt, client, tools)
     yield response.immediate_answer
     for call in response.tool_calls:
@@ -215,10 +218,14 @@ async def run_agent_for_call(
     call_id: str,
     repository: CallRepository,
     client: LLMClient | None = None,
+    *,
+    context: CallContext | None = None,
 ) -> AgentResponse:
     responses = [
         response
-        async for response in run_agent_turn(prompt, call_id, repository, client)
+        async for response in run_agent_turn(
+            prompt, call_id, repository, client, context=context
+        )
     ]
     return responses[-1]
 
@@ -229,140 +236,183 @@ async def run_agent_turn(
     repository: CallRepository,
     client: LLMClient | None = None,
     *,
+    context: CallContext | None = None,
     event_sink: EventSink | None = None,
 ):
-    """Yield the immediate reply, then a reply synthesized from tool results."""
+    """Run up to three evidence/tool rounds for one completed caller turn."""
     configure_logging()
+    context = context or CallContext(call_id)
+    if context.call_id != call_id:
+        raise ValueError("context call_id does not match call_id")
+    context.begin_turn()
     _logger.info("starting call agent | call_id=%s prompt=%r", call_id, prompt)
     await repository.append_event(call_id, "caller_text_received", {"text": prompt})
     memory = await repository.memory_for_call(call_id)
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
     try:
-        all_tools = load_tools(create_clinic_tools(api, call_id))
-        state = await repository.workflow_for_call(call_id)
-        tools = _enabled_tools(all_tools, state)
-        response = await _observed_tool_completion(
-            f"{prompt}\n\nCall memory:\n{memory}", llm_client, tools, event_sink
-        )
-        _logger.info(
-            "agent response model | call_id=%s response=%s",
-            call_id,
-            response.model_dump(),
+        clinic_tools = ClinicTools(api, context)
+        all_tools = load_tools(clinic_tools.functions())
+        all_tool_results: list[dict[str, Any]] = []
+        model_prompt = f"{prompt}\n\nCall memory:\n{memory}"
+        for round_number in range(MAX_TOOL_ROUNDS):
+            tools = _enabled_tools(all_tools, context)
+            response = await _observed_tool_completion(
+                model_prompt, llm_client, tools, event_sink
+            )
+            _logger.info(
+                "agent response model | call_id=%s round=%s response=%s",
+                call_id,
+                round_number + 1,
+                response.model_dump(),
+            )
+            await repository.append_event(
+                call_id,
+                "agent_response",
+                {"text": response.immediate_answer, "round": round_number + 1},
+            )
+            yield response
+            if not response.tool_calls:
+                return
+
+            round_results = []
+            for call in response.tool_calls:
+                tool_call_id = uuid4().hex
+                started_ns = time.perf_counter_ns()
+                await _emit(
+                    event_sink,
+                    ToolCallStartedFrame(
+                        tool=call.name,
+                        tool_call_id=tool_call_id,
+                        arguments=_safe_arguments(call.arguments),
+                    ),
+                )
+                tool = tools.get(call.name)
+                output: Any = f"Unknown tool: {call.name}"
+                if tool is None:
+                    await _emit_tool_error(
+                        event_sink,
+                        call.name,
+                        tool_call_id,
+                        started_ns,
+                        "UnknownToolError",
+                        "Unknown tool",
+                    )
+                else:
+                    try:
+                        output = await asyncio.to_thread(tool.execute, **call.arguments)
+                    except asyncio.CancelledError:
+                        context.mark_any_submission_uncertain()
+                        await _record_submission(
+                            repository, call_id, clinic_tools.take_submission()
+                        )
+                        await _save_context(repository, call_id, context)
+                        raise
+                    except (TypeError, ValueError) as exc:
+                        await _emit_tool_error(
+                            event_sink,
+                            call.name,
+                            tool_call_id,
+                            started_ns,
+                            type(exc).__name__,
+                            "Tool execution failed",
+                        )
+                        output = f"Tool error: {exc}"
+                    except Exception as exc:
+                        await _emit_tool_error(
+                            event_sink,
+                            call.name,
+                            tool_call_id,
+                            started_ns,
+                            type(exc).__name__,
+                            "Tool execution failed",
+                        )
+                        await _record_submission(
+                            repository, call_id, clinic_tools.take_submission()
+                        )
+                        await _save_context(repository, call_id, context)
+                        raise
+                    else:
+                        await _emit(
+                            event_sink,
+                            ToolCallFinishedFrame(
+                                tool=call.name,
+                                tool_call_id=tool_call_id,
+                                duration_ms=_duration_ms(started_ns),
+                                status="success",
+                                result_summary=_result_summary(output),
+                            ),
+                        )
+                await _record_submission(
+                    repository, call_id, clinic_tools.take_submission()
+                )
+                await _save_context(repository, call_id, context)
+                await repository.append_event(
+                    call_id,
+                    "tool_call",
+                    {"name": call.name, "arguments": call.arguments},
+                )
+                await repository.append_event(
+                    call_id, "tool_result", {"name": call.name, "output": output}
+                )
+                _logger.info(
+                    "tool result | call_id=%s tool=%s output=%s",
+                    call_id,
+                    call.name,
+                    output,
+                )
+                round_results.append(
+                    {"name": call.name, "arguments": call.arguments, "output": output}
+                )
+            all_tool_results.extend(round_results)
+            model_prompt = (
+                f"Original caller request:\n{prompt}\n\n"
+                f"Tool results so far:\n{all_tool_results}\n\n"
+                "Continue with the next required tools, or answer the caller using "
+                "only these results. Do not mention internal tools."
+            )
+
+        follow_up = await _observed_completion(
+            f"Original caller request:\n{prompt}\n\n"
+            f"Tool results:\n{all_tool_results}\n\n"
+            "Answer the caller using only these tool results. "
+            "Be concise and do not mention internal tools.",
+            llm_client,
+            {},
+            event_sink,
         )
         await repository.append_event(
-            call_id, "agent_response", {"text": response.immediate_answer}
+            call_id, "agent_follow_up", {"text": follow_up.immediate_answer}
         )
-        yield response
-
-        tool_results = []
-        for call in response.tool_calls:
-            tool = _enabled_tools(all_tools, state).get(call.name)
-            tool_call_id = uuid4().hex
-            started_ns = time.perf_counter_ns()
-            await _emit(
-                event_sink,
-                ToolCallStartedFrame(
-                    tool=call.name,
-                    tool_call_id=tool_call_id,
-                    arguments=_safe_arguments(call.arguments),
-                ),
-            )
-            tool = tools.get(call.name)
-            output: Any = f"Unknown tool: {call.name}"
-            if tool is None:
-                await _emit_tool_error(
-                    event_sink,
-                    call.name,
-                    tool_call_id,
-                    started_ns,
-                    "UnknownToolError",
-                    "Unknown tool",
-                )
-            else:
-                try:
-                    output = await asyncio.to_thread(tool.execute, **call.arguments)
-                except (TypeError, ValueError) as exc:
-                    await _emit_tool_error(
-                        event_sink,
-                        call.name,
-                        tool_call_id,
-                        started_ns,
-                        type(exc).__name__,
-                        "Tool execution failed",
-                    )
-                    output = f"Tool error: {exc}"
-                except Exception as exc:
-                    await _emit_tool_error(
-                        event_sink,
-                        call.name,
-                        tool_call_id,
-                        started_ns,
-                        type(exc).__name__,
-                        "Tool execution failed",
-                    )
-                    raise
-                else:
-                    await _emit(
-                        event_sink,
-                        ToolCallFinishedFrame(
-                            tool=call.name,
-                            tool_call_id=tool_call_id,
-                            duration_ms=_duration_ms(started_ns),
-                            status="success",
-                            result_summary=_result_summary(output),
-                        ),
-                    )
-            if tool and not isinstance(output, str):
-                state = update_state(state, call.name, output)
-                await repository.save_workflow(call_id, state)
-            await repository.append_event(
-                call_id,
-                "tool_call",
-                {"name": call.name, "arguments": call.arguments},
-            )
-            await repository.append_event(
-                call_id, "tool_result", {"name": call.name, "output": output}
-            )
-            _logger.info(
-                "tool result | call_id=%s tool=%s output=%s",
-                call_id,
-                call.name,
-                output,
-            )
-            await repository.record_submission(
-                call_id,
-                call.name.upper(),
-                call.arguments,
-                200,
-                {"output": output},
-            )
-            tool_results.append(
-                {"name": call.name, "arguments": call.arguments, "output": output}
-            )
-        if tool_results:
-            follow_up = await _observed_completion(
-                f"Original caller request:\n{prompt}\n\n"
-                f"Tool results:\n{tool_results}\n\n"
-                "Answer the caller using only these tool results. "
-                "Be concise and do not mention internal tools.",
-                llm_client,
-                {},
-                event_sink,
-            )
-            _logger.info(
-                "agent follow-up model | call_id=%s response=%s",
-                call_id,
-                follow_up.model_dump(),
-            )
-            await repository.append_event(
-                call_id,
-                "agent_follow_up",
-                {"text": follow_up.immediate_answer},
-            )
-            yield follow_up
+        yield follow_up
     finally:
         await asyncio.to_thread(api.close)
+
+
+async def _record_submission(
+    repository: CallRepository,
+    call_id: str,
+    submission: SubmissionRecord | None,
+) -> None:
+    if submission is None:
+        return
+    await repository.record_submission(
+        call_id,
+        submission.action,
+        submission.payload,
+        submission.response_status,
+        submission.response,
+    )
+
+
+async def _save_context(
+    repository: CallRepository, call_id: str, context: CallContext
+) -> None:
+    projection = context.projection()
+    save_workflow = getattr(repository, "save_workflow", None)
+    if save_workflow is not None:
+        await save_workflow(call_id, projection)
+    await repository.append_event(call_id, "request_context_updated", projection)
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:

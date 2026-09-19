@@ -19,6 +19,7 @@ from stt import (
 from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
+from .call_context import CallContext
 from .reply import AgentReply
 
 logger = logging.getLogger(__name__)
@@ -63,12 +64,13 @@ def create_transcription_agent(
         await database.init()
         repository = CallRepository(database)
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
+        context = CallContext(meta.call_id)
         processors = [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
             create_user_aggregator(meta, on_completed_turn),
-            AgentReply(meta.call_id, repository),
+            AgentReply(meta.call_id, repository, context),
             create_tts(),
         ]
         logger.info(

@@ -169,10 +169,16 @@ def test_api_errors_preserve_status_and_response():
 
 def test_per_call_tools_hide_call_id_and_generate_expected_schema(api: ClinicApi):
     tools = load_tools(create_clinic_tools(api, "CA-42"))
-    booking = tools["book_appointment"]["definition"]["function"]["parameters"]
-    availability = tools["search_availability"]["definition"]["function"]["parameters"]
+    booking = tools["prepare_booking"].definition["function"]["parameters"]
+    availability = tools["search_availability"].definition["function"]["parameters"]
 
     assert "call_id" not in booking["properties"]
+    assert "patient_id" not in booking["properties"]
+    assert {
+        "book_appointment",
+        "reschedule_appointment",
+        "cancel_appointment",
+    }.isdisjoint(tools)
     assert availability["properties"]["insurers"] == {
         "type": "array",
         "items": {"type": "string"},
