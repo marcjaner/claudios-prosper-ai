@@ -7,6 +7,7 @@ from observability import emit, update_call
 from observability.frames import TTSRequestedFrame
 
 from .agent import run_agent_turn
+from .stage_runtime import CallGraph
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +15,12 @@ AGENT_ERROR_REPLY = "Lo siento, no he podido procesarlo. ¿Puede repetirlo?"
 
 
 class AgentReply(FrameProcessor):
-    def __init__(self, call_id, repository):
+    def __init__(self, call_id, repository, state: CallGraph | None = None):
         super().__init__()
         self.call_id = call_id
         self.repository = repository
+        # Frozen for the call: saving in the builder must not move live ground.
+        self.state = state or CallGraph.start()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -39,6 +42,7 @@ class AgentReply(FrameProcessor):
                 self.call_id,
                 self.repository,
                 event_sink=self._emit_event,
+                state=self.state,
             ):
                 logger.info(
                     "agent response ready | call_id=%s answer=%r tool_calls=%s",

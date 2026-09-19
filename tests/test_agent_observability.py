@@ -1,6 +1,5 @@
 import asyncio
 from typing import Any, cast
-from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +13,7 @@ from agent.llm import (
     Usage,
 )
 from agent.models import AgentResponse, ToolCall, ToolResult
+from agent.stage_runtime import CallGraph
 
 
 class FakeBus:
@@ -80,17 +80,14 @@ class FakeClinicApi:
 
 
 def run(response: AgentResponse, api: FakeClinicApi):
-    with patch(
-        "agent.agent._enabled_tools", side_effect=lambda tools, state: tools
-    ):
-        return list(
-            run_agent(
-                "hola",
-                cast(Any, FakeClient(response)),
-                clinic_api=cast(ClinicApi, api),
-                call_id="CA456",
-            )
+    return list(
+        run_agent(
+            "hola",
+            cast(Any, FakeClient(response)),
+            clinic_api=cast(ClinicApi, api),
+            call_id="CA456",
         )
+    )
 
 
 def test_tool_call_and_result_share_a_tool_call_id(bus):
@@ -297,35 +294,42 @@ class FakeTurnClient:
         )
 
 
-def run_turn(monkeypatch, response, api, *, state=None):
+def run_turn(monkeypatch, response, api, *, state=None, stage=None):
     monkeypatch.setattr(
         ClinicApi, "from_environment", classmethod(lambda cls: api)
     )
-    repository = FakeRepository(state)
+    repository = FakeRepository()
     client = cast(Any, FakeTurnClient(response))
+    graph_state = CallGraph.start()
+    graph_state.facts.update(state or {})
+    if stage:
+        graph_state.stage_id = stage
 
     async def collect():
         return [
             item
             async for item in run_agent_turn(
-                "hola", "CA456", cast(Any, repository), client
+                "hola", "CA456", cast(Any, repository), client, state=graph_state
             )
         ]
 
-    return asyncio.run(collect()), repository
+    return asyncio.run(collect()), repository, graph_state
+
+
+BOOKING_STAGE = {"stage": "reservar", "state": {"patient_id": "P00042", "slot_elegido": BOOK_ARGS["slot"]}}
 
 
 def test_turn_book_emits_tool_events_outcome_and_one_submission(
     monkeypatch, bus
 ):
-    responses, repository = run_turn(
+    responses, repository, _graph = run_turn(
         monkeypatch,
         AgentResponse(
             immediate_answer="Un momento.",
             tool_calls=[ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
         ),
         FakeClinicApi(results={"book_appointment": {"record": {"id": "A1"}}}),
-        state={"patient_id": "P00042", "catalogue_data": {"loaded": True}},
+        **BOOKING_STAGE,
     )
 
     tool_call = next(e for e in bus.events if e[1] == "tool_call")
@@ -347,14 +351,14 @@ def test_turn_book_emits_tool_events_outcome_and_one_submission(
 
 
 def test_turn_book_failure_records_no_outcome_or_submission(monkeypatch, bus):
-    responses, repository = run_turn(
+    _responses, repository, _graph = run_turn(
         monkeypatch,
         AgentResponse(
             immediate_answer="Un momento.",
             tool_calls=[ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
         ),
         FakeClinicApi(fail_with=ProsperApiError(422, {"detail": "slot taken"})),
-        state={"patient_id": "P00042", "catalogue_data": {"loaded": True}},
+        **BOOKING_STAGE,
     )
 
     tool_result = next(e for e in bus.events if e[1] == "tool_result")
@@ -363,11 +367,12 @@ def test_turn_book_failure_records_no_outcome_or_submission(monkeypatch, bus):
     assert not any(e[1] == "submit" for e in bus.events)
     assert not any("outcome" in fields for _, fields in bus.updates)
     assert repository.submissions == []
-    assert len(responses) == 2
+    # The provider's own wording never reaches the model, only the status.
+    assert "slot taken" not in tool_result[2]["error"]
 
 
 def test_turn_search_identifies_patient_without_submission(monkeypatch, bus):
-    responses, repository = run_turn(
+    responses, repository, _graph = run_turn(
         monkeypatch,
         AgentResponse(
             immediate_answer="Ya la tengo.",
@@ -398,7 +403,7 @@ def test_turn_search_identifies_patient_without_submission(monkeypatch, bus):
 
 
 def test_turn_no_action_records_reason_and_outcome(monkeypatch, bus):
-    responses, repository = run_turn(
+    responses, repository, _graph = run_turn(
         monkeypatch,
         AgentResponse(
             immediate_answer="No hay huecos.",
@@ -420,7 +425,8 @@ def test_turn_no_action_records_reason_and_outcome(monkeypatch, bus):
 
 
 def test_turn_book_is_blocked_before_identification(monkeypatch, bus):
-    responses, repository = run_turn(
+    """The entry stage has no booking tool, so the call never reaches Prosper."""
+    responses, repository, _graph = run_turn(
         monkeypatch,
         AgentResponse(
             immediate_answer="Un momento.",
@@ -429,56 +435,71 @@ def test_turn_book_is_blocked_before_identification(monkeypatch, bus):
         FakeClinicApi(),
     )
 
-    tool_result = next(e for e in bus.events if e[1] == "tool_result")
-    assert tool_result[2]["status"] == 404
-    assert not any(e[1] == "submit" for e in bus.events)
+    assert not any(event[1] == "tool_result" for event in bus.events)
+    rejected = next(event for event in bus.events if event[1] == "tool_rejected")
+    assert rejected[2]["requested"] == "book_appointment"
+    assert not any(event[1] == "submit" for event in bus.events)
     assert not any("outcome" in fields for _, fields in bus.updates)
     assert repository.submissions == []
-    assert repository.workflow == {}
-    assert len(responses) == 2
+    # The promise was never spoken, because the operation behind it was refused.
+    assert "Un momento." not in [item.immediate_answer for item in responses]
 
 
-def test_turn_unlocks_stages_within_one_turn(monkeypatch, bus):
-    responses, repository = run_turn(
-        monkeypatch,
-        AgentResponse(
-            immediate_answer="Un momento.",
-            tool_calls=[
-                ToolCall(name="search_patients", arguments={"name": "Ana"}),
-                ToolCall(name="get_clinic_catalogue", arguments={}),
-                ToolCall(name="book_appointment", arguments=BOOK_ARGS),
-            ],
-        ),
-        FakeClinicApi(
-            results={
-                "search_patients": {
-                    "matches": [
-                        {
-                            "patient_id": "P00042",
-                            "given_name": "Ana",
-                            "first_surname": "García",
-                            "second_surname": "López",
-                            "insurer": "sanitas",
-                        }
-                    ]
-                },
-                "get_clinic_catalogue": {"specialties": ["dermatología"]},
-                "book_appointment": {"record": {"id": "A1"}},
-            }
-        ),
+def test_turn_identifies_then_books_without_the_caller_speaking_again(monkeypatch, bus):
+    """Identification and the action land in one caller turn, but not one batch.
+
+    The booking arguments in a lookup's own batch were written before the lookup
+    ran, so its patient_id could only have been invented. The runtime refuses it
+    and the model books on the next step, from the result it can now see.
+    """
+    api = FakeClinicApi(
+        results={
+            "search_patients": {"matches": [{"patient_id": "P00042", "given_name": "Ana"}]},
+            "book_appointment": {"record": {"id": "A1"}},
+        }
     )
+    monkeypatch.setattr(ClinicApi, "from_environment", classmethod(lambda cls: api))
 
-    tool_results = [e for e in bus.events if e[1] == "tool_result"]
-    assert [e[2]["status"] for e in tool_results] == [200, 200, 200]
-    tool_calls = [e for e in bus.events if e[1] == "tool_call"]
-    assert len(tool_calls) == 3
-    assert {
-        result[2]["tool_call_id"] for result in tool_results
-    } == {call[2]["tool_call_id"] for call in tool_calls}
+    steps = [
+        [ToolCall(name="search_patients", arguments={"name": "Ana García"}),
+         ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
+        [ToolCall(name="record_facts", arguments={"facts": {"patient_id": "P00042"}}),
+         ToolCall(name="go_to", arguments={"stage": "atender"})],
+        [ToolCall(name="record_facts", arguments={"facts": {"slot_elegido": BOOK_ARGS["slot"]}}),
+         ToolCall(name="go_to", arguments={"stage": "reservar"})],
+        [ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
+    ]
 
-    assert repository.workflow["patient_id"] == "P00042"
-    assert repository.workflow["catalogue_data"]
-    assert [s[1] for s in repository.submissions] == ["BOOK"]
+    class ScriptedClient(FakeTurnClient):
+        def __init__(self):
+            self.remaining = list(steps)
+
+        def complete_with_tools(self, prompt, tools, **kwargs):
+            calls = self.remaining.pop(0) if self.remaining else []
+            return ToolCompletion(
+                text="Un momento.",
+                tool_calls=[
+                    LLMToolCall(call_id=str(i), name=c.name, arguments=c.arguments)
+                    for i, c in enumerate(calls)
+                ],
+                usage=Usage(),
+            )
+
+    repository = FakeRepository()
+    graph = CallGraph.start()
+
+    async def collect():
+        return [
+            item
+            async for item in run_agent_turn(
+                "hola", "CA456", cast(Any, repository), cast(Any, ScriptedClient()), state=graph
+            )
+        ]
+
+    asyncio.run(collect())
+
+    assert graph.stage_id == "reservar"
+    assert graph.facts["patient_id"] == "P00042"
+    assert [submission[1] for submission in repository.submissions] == ["BOOK"]
     update = next(u for u in bus.updates if "outcome" in u[1])
     assert update[1]["outcome"] == "BOOK"
-    assert len(responses) == 2

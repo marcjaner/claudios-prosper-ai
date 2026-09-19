@@ -319,7 +319,8 @@ def test_llm_failure_emits_safe_failure_event(monkeypatch):
     assert clinic_api.is_closed is True
 
 
-def test_tool_failure_emits_error_before_preserving_main_failure_behavior(monkeypatch):
+def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch):
+    """A clinic outage becomes feedback the agent can voice, not a silent dead turn."""
     clinic_api = FakeClinicApi(RuntimeError("secret clinic details"))
     monkeypatch.setattr(
         ClinicApi, "from_environment", classmethod(lambda cls: clinic_api)
@@ -332,30 +333,30 @@ def test_tool_failure_emits_error_before_preserving_main_failure_behavior(monkey
         async def emit(frame):
             frames.append(frame)
 
-        with pytest.raises(RuntimeError, match="secret clinic details"):
-            async for response in run_agent_turn(
-                "Hello",
-                "CA456",
-                cast(CallRepository, FakeRepository()),
-                cast(
-                    LLMClient,
-                    FakeLLMClient(
-                        [
-                            AgentResponse(
-                                immediate_answer="Let me check.",
-                                tool_calls=[
-                                    ToolCall(
-                                        name="search_patients",
-                                        arguments={"name": "Ana"},
-                                    )
-                                ],
-                            )
-                        ]
-                    ),
+        async for response in run_agent_turn(
+            "Hello",
+            "CA456",
+            cast(CallRepository, FakeRepository()),
+            cast(
+                LLMClient,
+                FakeLLMClient(
+                    [
+                        AgentResponse(
+                            immediate_answer="Let me check.",
+                            tool_calls=[
+                                ToolCall(
+                                    name="search_patients",
+                                    arguments={"name": "Ana"},
+                                )
+                            ],
+                        ),
+                        AgentResponse(immediate_answer="Sorry, I could not look that up."),
+                    ]
                 ),
-                event_sink=emit,
-            ):
-                replies.append(response)
+            ),
+            event_sink=emit,
+        ):
+            replies.append(response)
         return frames, replies
 
     frames, replies = asyncio.run(run())
@@ -366,7 +367,11 @@ def test_tool_failure_emits_error_before_preserving_main_failure_behavior(monkey
     assert finished.status == "error"
     assert finished.error_type == "RuntimeError"
     assert finished.error_message == "Tool execution failed"
-    assert [response.immediate_answer for response in replies] == ["Let me check."]
+    assert "secret" not in finished.error_message
+    assert [response.immediate_answer for response in replies] == [
+        "Let me check.",
+        "Sorry, I could not look that up.",
+    ]
     assert clinic_api.is_closed is True
 
 
@@ -378,7 +383,7 @@ def test_tool_arguments_exclude_credentials_headers_and_hidden_call_id(monkeypat
                 immediate_answer="Let me check.",
                 tool_calls=[
                     ToolCall(
-                        name="unknown_tool",
+                        name="search_patients",
                         arguments={
                             "name": "Ana",
                             "api_key": "secret",
@@ -391,7 +396,7 @@ def test_tool_arguments_exclude_credentials_headers_and_hidden_call_id(monkeypat
                     )
                 ],
             ),
-            AgentResponse(immediate_answer="I could not find that tool."),
+            AgentResponse(immediate_answer="Nobody by that name."),
         ],
     )
 
