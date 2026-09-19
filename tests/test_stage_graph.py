@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from agent.agent import run_agent_turn
-from agent.graph import InvalidGraph, parse_graph
+from agent.graph import InvalidGraph, load_graph, parse_graph
 from agent.llm import LLMToolCall, ToolCompletion, Usage
 from agent.stage_runtime import CallGraph
 
@@ -153,6 +153,19 @@ def test_duplicate_stage_ids_are_rejected():
         parse_graph({"entry": "identify", "nodes": [IDENTIFY, IDENTIFY]})
 
 
+def test_default_graph_keeps_registration_reachable_and_in_scope():
+    graph = load_graph()
+    identify = graph.node("identificar")
+    registrar = graph.node("registrar")
+    state = CallGraph.start(graph)
+
+    assert "register_patient" in identify.tools
+    assert "register_patient" in registrar.tools
+    assert "submit_no_action" not in registrar.tools
+    state.record_facts({"facts": {"caller_unknown": "si"}})
+    assert state.ready_fact_transition() == "registrar"
+
+
 # --- eligibility and facts --------------------------------------------------
 
 def test_transition_is_blocked_until_its_facts_exist():
@@ -191,6 +204,14 @@ def test_prompt_names_the_exact_keys_a_transition_needs():
     context = render_context(two_stage_state())
     assert "patient_id" in context
     assert "book" in context
+
+
+def test_a_sole_fact_gated_transition_can_be_selected_automatically():
+    state = two_stage_state()
+
+    assert state.ready_fact_transition() is None
+    state.facts["patient_id"] = "P1"
+    assert state.ready_fact_transition() == "book"
 
 
 # --- the turn loop ----------------------------------------------------------
@@ -256,6 +277,19 @@ def test_a_tool_result_continues_the_turn_without_the_caller():
     assert state.stage_id == "book"
     assert state.facts["patient_id"] == "P1"
     assert spoken == ["One moment.", "You are in the system, when suits you?"]
+
+
+def test_recording_a_transition_fact_moves_stages_without_go_to():
+    state = two_stage_state()
+    client = FakeClient(
+        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+        says("When would you like to come in?"),
+    )
+
+    spoken = run_turn("I'm already a patient", state, client, FakeRepository())
+
+    assert state.stage_id == "book"
+    assert spoken == ["When would you like to come in?"]
 
 
 def test_bookkeeping_steps_stay_silent():
@@ -375,7 +409,7 @@ def test_a_silent_step_still_answers_the_caller():
     state = two_stage_state()
     client = FakeClient(
         says("One moment.", ("search_patients", {"name": "Ana"})),
-        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+        says("", ("record_facts", {"facts": {"name": "Ana"}})),
     )
 
     spoken = run_turn("I'm Ana", state, client, FakeRepository(),
@@ -432,6 +466,22 @@ def test_a_failed_lookup_may_be_tried_again_but_a_failed_submission_may_not():
     assert state.refuse_reason("book_appointment", {"patient_id": "P1"})
 
 
+def test_a_rejected_submission_may_only_retry_with_changed_arguments():
+    state = two_stage_state()
+    state.facts["patient_id"] = "P1"
+    state.enter("book")
+    rejected = {"patient_id": "P1", "slot": "09:00"}
+    state.failed_calls.add(state.signature("book_appointment", rejected))
+
+    assert state.refuse_reason("book_appointment", rejected)
+    state.start_turn()
+    assert state.refuse_reason("book_appointment", rejected)
+    assert (
+        state.refuse_reason("book_appointment", {"patient_id": "P1", "slot": "10:00"})
+        == ""
+    )
+
+
 def test_a_failed_call_is_not_remembered_as_already_answered():
     state = two_stage_state()
     client = FakeClient(
@@ -460,7 +510,7 @@ def test_a_blank_final_answer_still_says_something():
     state = two_stage_state()
     client = FakeClient(
         says("Checking.", ("search_patients", {"name": "Ana"})),
-        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+        says("", ("record_facts", {"facts": {"name": "Ana"}})),
     )
     client.blank_final = True
 

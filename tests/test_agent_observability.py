@@ -370,11 +370,11 @@ def test_turn_book_failure_records_no_outcome_or_submission(monkeypatch, bus):
     tool_result = next(e for e in bus.events if e[1] == "tool_result")
     assert tool_result[2]["status"] == 422
     assert "422" in tool_result[2]["error"]
+    assert tool_result[2]["detail"] == {"detail": "slot taken"}
     assert not any(e[1] == "submit" for e in bus.events)
     assert not any("outcome" in fields for _, fields in bus.updates)
     assert repository.submissions == []
-    # The provider's own wording never reaches the model, only the status.
-    assert "slot taken" not in tool_result[2]["error"]
+    assert len([e for e in bus.events if e[1] == "tool_call"]) == 1
 
 
 def test_turn_search_identifies_patient_without_submission(monkeypatch, bus):

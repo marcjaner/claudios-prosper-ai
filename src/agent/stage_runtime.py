@@ -80,6 +80,7 @@ class CallGraph:
     history: list[HistoryEntry] = field(default_factory=list)
     turn: int = 0
     failed_tools: set[str] = field(default_factory=set)
+    failed_calls: set[str] = field(default_factory=set)
     calls_made: set[str] = field(default_factory=set)
 
     def start_turn(self) -> None:
@@ -119,6 +120,8 @@ class CallGraph:
             # could book the same patient twice. A failed lookup may simply be tried
             # again, which is how a caller survives one flaky directory request.
             return f"{name} already failed once this turn and must not be retried"
+        if self.signature(name, arguments) in self.failed_calls:
+            return f"{name} already failed with these arguments in this call"
         if self.signature(name, arguments) in self.calls_made:
             # The answer is already in the conversation against a read-only EHR,
             # so repeating it would spend the turn's budget saying nothing new.
@@ -172,6 +175,17 @@ class CallGraph:
             for edge in self.graph.edges
             if edge.source == self.stage_id
         ]
+
+    def ready_fact_transition(self) -> str | None:
+        """Return the sole fact-gated transition that is ready, if there is one."""
+        ready = [
+            edge.target
+            for edge in self.graph.edges
+            if edge.source == self.stage_id
+            and edge.requires
+            and all(key in self.facts for key in edge.requires)
+        ]
+        return ready[0] if len(ready) == 1 else None
 
 
 def render_context(state: CallGraph) -> str:
