@@ -5,8 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .graph import GO_TO_TOOL, RECORD_FACTS_TOOL, Graph, load_graph
+from .graph import GO_TO_TOOL, GRAPH_TOOL_NAMES, RECORD_FACTS_TOOL, Graph, load_graph
 from .tools import SUBMISSION_TOOL_NAMES
+
+# Submitting one of these finishes what the caller asked for, so the call starts
+# the next request at the entry stage with a clean set of facts.
+COMPLETING_TOOLS = frozenset({
+    "book_appointment", "reschedule_appointment", "cancel_appointment", "submit_no_action",
+})
+# These end the call instead. A newly registered patient cannot be booked, and an
+# emergency must stop the appointment machinery rather than start it again.
+TERMINAL_TOOLS = frozenset({"register_patient", "escalate_to_human"})
 
 # An action step's speech is written before its own results, so the last step of a
 # turn is always tool-free: otherwise a booking on the final step is never confirmed.
@@ -79,6 +88,9 @@ class CallGraph:
     facts: dict[str, str] = field(default_factory=dict)
     history: list[HistoryEntry] = field(default_factory=list)
     turn: int = 0
+    request: int = 1
+    finished: bool = False
+    done: list[str] = field(default_factory=list)
     failed_tools: set[str] = field(default_factory=set)
     calls_made: set[str] = field(default_factory=set)
 
@@ -86,6 +98,25 @@ class CallGraph:
         self.turn += 1
         self.failed_tools.clear()
         self.calls_made.clear()
+
+    def complete(self, tool_name: str) -> str:
+        """Close the request this action answered, and say what happens next.
+
+        The boundary is not guessed from the conversation: every request ends by
+        submitting exactly one action, so the accepted submission is the signal.
+        """
+        self.done.append(tool_name)
+        if tool_name in TERMINAL_TOOLS:
+            self.finished = True
+            return "finished"
+        if tool_name in COMPLETING_TOOLS:
+            self.request += 1
+            # Only the facts go. The conversation and the submitted actions stay,
+            # so the next request continues the call instead of restarting it.
+            self.facts.clear()
+            self.stage_id = self.graph.entry
+            return "next_request"
+        return "continues"
 
     @staticmethod
     def signature(name: str, arguments: dict[str, Any]) -> str:
@@ -108,6 +139,8 @@ class CallGraph:
 
     def refuse_reason(self, name: str, arguments: dict[str, Any]) -> str:
         """Why this call is not allowed here, or an empty string if it is."""
+        if self.finished and name not in GRAPH_TOOL_NAMES:
+            return "this call is already finished and cannot take another action"
         if name == RECORD_FACTS_TOOL:
             return "" if self.has_facts_payload(arguments) else "record_facts needs a flat mapping of strings"
         if name == GO_TO_TOOL:
@@ -174,9 +207,32 @@ class CallGraph:
         ]
 
 
+ACTION_NAMES = {
+    "book_appointment": "una cita reservada",
+    "reschedule_appointment": "una cita cambiada",
+    "cancel_appointment": "una cita anulada",
+    "submit_no_action": "una petición rechazada",
+    "register_patient": "un paciente dado de alta",
+    "escalate_to_human": "una escalada",
+}
+
+
+def _render_progress(state: CallGraph) -> str:
+    """Where the call is up to, so a second request does not start with a greeting."""
+    if state.request == 1:
+        return "Esta es la primera petición de la llamada."
+    done = ", ".join(ACTION_NAMES.get(name, name) for name in state.done)
+    return (
+        f"Esta es la petición número {state.request} de la misma llamada. "
+        f"Ya has completado: {done}. Sigues hablando con la misma persona, así que "
+        "no la saludes de nuevo ni le preguntes otra vez con quién hablas: retoma la "
+        "conversación donde estaba y usa lo que ya te ha dicho."
+    )
+
+
 def render_context(state: CallGraph) -> str:
     """Everything the model needs about where the call is and what it knows."""
-    sections = [f"Current stage: {state.stage_id}"]
+    sections = [_render_progress(state), f"Current stage: {state.stage_id}"]
     if state.stage.prompt.strip():
         sections.append(state.stage.prompt.strip())
     sections.append(_render_facts(state.facts))

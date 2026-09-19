@@ -498,8 +498,11 @@ def test_turn_identifies_then_books_without_the_caller_speaking_again(monkeypatc
 
     asyncio.run(collect())
 
-    assert graph.stage_id == "reservar"
-    assert graph.facts["patient_id"] == "P00042"
+    # The booking completed the request, so the call is ready for the next one
+    # at the entry stage with a clean slate rather than sitting in reservar.
+    assert graph.stage_id == graph.graph.entry
+    assert graph.request == 2
+    assert graph.facts == {}
     assert [submission[1] for submission in repository.submissions] == ["BOOK"]
     update = next(u for u in bus.updates if "outcome" in u[1])
     assert update[1]["outcome"] == "BOOK"

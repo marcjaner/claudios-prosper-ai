@@ -68,7 +68,30 @@ class Graph(BaseModel):
             unknown = sorted(set(node.tools) - set(CLINIC_TOOL_NAMES))
             if unknown:
                 raise InvalidGraph(f"Stage {node.id!r} lists unknown tools: {unknown}")
+        self._check_forward_only()
         return self
+
+    def _check_forward_only(self) -> None:
+        """A call moves forward. Repeating work is a new request, not a backward edge."""
+        outgoing: dict[str, list[str]] = {node.id: [] for node in self.nodes}
+        for edge in self.edges:
+            outgoing[edge.source].append(edge.target)
+        settled: set[str] = set()
+        on_path: set[str] = set()
+
+        def walk(node_id: str) -> None:
+            if node_id in settled:
+                return
+            if node_id in on_path:
+                raise InvalidGraph(f"Transitions loop back to stage {node_id!r}")
+            on_path.add(node_id)
+            for target in outgoing[node_id]:
+                walk(target)
+            on_path.discard(node_id)
+            settled.add(node_id)
+
+        for node in self.nodes:
+            walk(node.id)
 
     def node(self, node_id: str) -> Node:
         for node in self.nodes:

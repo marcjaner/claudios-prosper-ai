@@ -641,6 +641,13 @@ async def _run_tool(
             call_id, SUBMISSIONS[call.name][1], call.arguments, 200, {"output": output}
         )
     _record_success(call_id, call.name, call.arguments, output)
+    if call.name in SUBMISSIONS:
+        finished_request = state.request
+        outcome = state.complete(call.name)
+        emit(call_id, "request_finished", {
+            "turn": state.turn, "request": finished_request, "action": call.name,
+            "next": outcome,
+        })
     return Operation(call.name, call.arguments, "executed", result=output)
 
 

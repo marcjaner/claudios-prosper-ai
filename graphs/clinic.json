@@ -71,16 +71,6 @@
         "patient_id",
         "catalogue_ready"
       ]
-    },
-    {
-      "from": "ejecutar",
-      "to": "consultar",
-      "requires": []
-    },
-    {
-      "from": "consultar",
-      "to": "identificar",
-      "requires": []
     }
   ]
 }
