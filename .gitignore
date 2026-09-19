@@ -225,3 +225,12 @@ outputs/
 
 # Coding
 .zcode/
+# Call observability
+*.db
+*.db-shm
+*.db-wal
+recordings/
+
+# Dashboard
+src/frontend/node_modules/
+src/frontend/dist/
