@@ -384,15 +384,17 @@ PAGE = r"""<!doctype html>
     .latency-totals { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
     .latency-total { display:flex; align-items:center; gap:6px; padding:4px 7px; border:1px solid var(--line); border-radius:3px; color:var(--muted); font-size:10px; }
     .swatch { width:7px; height:7px; border-radius:1px; background:var(--phase); }
-    .latency-row,.latency-axis { display:grid; grid-template-columns:105px minmax(500px,1fr); gap:10px; align-items:center; }
+    .latency-chart { display:grid; grid-template-columns:105px minmax(0,1fr); gap:10px; }
+    .latency-scroll { overflow-x:auto; padding-bottom:7px; scrollbar-color:var(--muted) #080a0b; scrollbar-width:thin; }
+    .latency-timeline { min-width:100%; }
     .latency-row { margin:5px 0; }
-    .latency-label { color:var(--muted); font-size:10px; }
+    .latency-label { display:flex; align-items:center; height:15px; margin:5px 0; color:var(--muted); font-size:10px; }
     .latency-track { position:relative; height:15px; background:#080a0b; border-left:1px solid var(--line); border-right:1px solid var(--line); }
     .latency-track::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(90deg,transparent 0,transparent calc(25% - 1px),#202729 25%); pointer-events:none; }
     .latency-phase { position:absolute; top:2px; z-index:1; height:11px; min-width:2px; border-radius:2px; background:var(--phase); opacity:.82; }
     .latency-phase:hover { opacity:1; box-shadow:0 0 9px color-mix(in srgb,var(--phase) 55%,transparent); }
     .deadline { position:absolute; z-index:2; top:-3px; bottom:-3px; width:1px; background:var(--red); box-shadow:0 0 7px var(--red); }
-    .deadline::before { content:'600s'; position:absolute; right:4px; top:-14px; color:var(--red); font-size:8px; }
+    .deadline::before { content:attr(data-label); position:absolute; right:4px; top:-14px; color:var(--red); font-size:8px; }
     .latency-axis { margin-top:3px; }
     .axis-track { position:relative; height:15px; color:#59645f; font-size:8px; }
     .axis-tick { position:absolute; transform:translateX(-50%); }
@@ -546,6 +548,8 @@ PAGE = r"""<!doctype html>
     function renderLatency(latency) {
       if (!latency?.phases?.length) return '<div class="empty">No timing trace for this call.</div>';
       const scale = latency.scale || 600;
+      const viewportSeconds = 300;
+      const timelineWidth = Math.max(100, (scale / viewportSeconds) * 100);
       const deadline = Math.min(100, (latency.limit / scale) * 100);
       const totals = latencyRows.filter(([key]) => latency.totals[key] != null).map(([key,label]) => `
         <span class="latency-total phase-${key}"><span class="swatch"></span>${label}<strong>${latency.totals[key].toFixed(1)}s</strong></span>`).join('');
@@ -555,10 +559,13 @@ PAGE = r"""<!doctype html>
           const width = (phase.duration / scale) * 100;
           return `<span class="latency-phase phase-${key}" style="left:${left}%;width:${width}%" title="${esc(phase.label)} · ${phase.duration.toFixed(2)}s · starts ${phase.start.toFixed(2)}s"></span>`;
         }).join('');
-        return `<div class="latency-row"><span class="latency-label">${label}</span><div class="latency-track">${phases}<span class="deadline" style="left:${deadline}%"></span></div></div>`;
+        return `<div class="latency-row"><div class="latency-track">${phases}<span class="deadline" data-label="${latency.limit}s" style="left:${deadline}%"></span></div></div>`;
       }).join('');
-      const ticks = [...new Set([0,120,240,360,480,600,scale])].filter((value) => value <= scale).map((value) => `<span class="axis-tick" style="left:${(value/scale)*100}%">${value}s</span>`).join('');
-      return `<div class="latency-panel"><div class="latency-totals">${totals}</div>${rows}<div class="latency-axis"><span></span><div class="axis-track">${ticks}</div></div><div class="count">Cumulative lane totals; overlapping phases are shown on separate lanes.</div></div>`;
+      const tickValues = Array.from({length: Math.floor(scale / 60) + 1}, (_, index) => index * 60);
+      if (tickValues.at(-1) !== scale) tickValues.push(scale);
+      const ticks = tickValues.map((value) => `<span class="axis-tick" style="left:${(value/scale)*100}%">${value}s</span>`).join('');
+      const labels = latencyRows.map(([, label]) => `<span class="latency-label">${label}</span>`).join('');
+      return `<div class="latency-panel"><div class="latency-totals">${totals}</div><div class="latency-chart"><div>${labels}</div><div class="latency-scroll"><div class="latency-timeline" style="width:${timelineWidth}%">${rows}<div class="latency-axis"><div class="axis-track">${ticks}</div></div></div></div></div><div class="count">Cumulative lane totals; 300s viewport; scroll horizontally for the full call.</div></div>`;
     }
 
     function renderRaw(timeline) {
