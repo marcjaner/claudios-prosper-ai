@@ -5,11 +5,13 @@ import CallDetail from "./CallDetail.jsx";
 import History from "./History.jsx";
 import Sparkline from "./Sparkline.jsx";
 import Wall from "./Wall.jsx";
+import Guardrails from "./Guardrails.jsx";
 import { useLiveCalls } from "./useLiveCalls.js";
 
 const VIEWS = {
   "#/wall": { label: "Wall", component: Wall },
   "#/historico": { label: "Histórico", component: History },
+  "#/guardrails": { label: "Rules", component: Guardrails },
 };
 // Reachable by URL but deliberately out of the nav: the builder configures the
 // agent, it is not part of the console a clinic — or the jury — is shown.
@@ -57,7 +59,7 @@ export default function App() {
   const returnTo = callMatch?.[2] === "wall" ? "#/wall" : "#/historico";
   const view = ROUTES[route] ? route : DEFAULT_VIEW;
   const View = ROUTES[view].component;
-  const clinicTheme = Boolean(openCall) || view === "#/wall" || view === "#/historico";
+  const clinicTheme = Boolean(openCall) || view === "#/wall" || view === "#/historico" || view === "#/guardrails";
   const activeView = openCall ? returnTo : view;
 
   return (
@@ -106,7 +108,7 @@ export default function App() {
               }
             >
               {clinicTheme
-                ? { "#/wall": "Wall", "#/historico": "History" }[hash]
+                ? { "#/wall": "Wall", "#/historico": "History", "#/guardrails": "Rules" }[hash]
                 : label}
             </a>
           ))}

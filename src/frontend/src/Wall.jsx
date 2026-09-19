@@ -121,7 +121,7 @@ function CallCard({ call, events, now }) {
   const score = parseScoreJson(call.score_json);
   const turnCount = score?.turn_count ?? 0;
   const hasScore = typeof call.score_overall === "number";
-  const alert = live && turnCount >= 2 && hasScore && call.score_overall < 40;
+  const alert = Boolean(call.guardrail_breached) || (live && turnCount >= 2 && hasScore && call.score_overall < 40);
   const action = live ? currentAction(events, call) : "Call completed";
   const callerName = call.patient_name ?? call.from_number ?? "Incoming call";
   const callerDetail = call.patient_name

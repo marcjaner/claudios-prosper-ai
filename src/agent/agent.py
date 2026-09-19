@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+import httpx
 from pipecat.frames.frames import SystemFrame
 from pipecat.transcriptions.language import Language
 
@@ -30,6 +33,7 @@ from agent.stage_runtime import (
 )
 from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
+from scoring import classify_guardrail_breach
 from observability import emit, update_call
 from observability.frames import (
     LLMRequestFailedFrame,
@@ -53,6 +57,7 @@ SENSITIVE_ARGUMENT_MARKERS = {
     "token",
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
+GUARDRAIL_REFUSAL = "I cannot help with that request. I can help you with your appointment."
 SUBMISSIONS = {
     "register_patient": ("/api/v1/submit/register", "REGISTER"),
     "book_appointment": ("/api/v1/submit/book", "BOOK"),
@@ -385,6 +390,9 @@ async def run_agent_turn(
     state.start_turn()
     state.history.append(HistoryEntry(speaker="caller", text=prompt))
     await repository.append_event(call_id, "caller_text_received", {"text": prompt})
+    await repository.seed_default_guardrails()
+    guardrails = await repository.list_guardrails()
+    guardrail_text = "\n".join(f"- {row.title}: {row.description or row.text}" for row in guardrails)
 
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
@@ -394,12 +402,28 @@ async def run_agent_turn(
         tools = load_tools(create_clinic_tools(api, call_id))
         for step in range(1, MAX_ACTION_STEPS + 1):
             completion = await _observed_tool_completion(
-                _graph_prompt(state, language),
+                _graph_prompt(state, language, guardrail_text),
                 llm_client,
                 _offered_tools(state, tools),
                 event_sink,
             )
             batch = _plan_batch(completion, state, call_id, step)
+            api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
+            if api_key and guardrails and completion.text.strip():
+                async with httpx.AsyncClient(timeout=15) as jev_client:
+                    classification = await classify_guardrail_breach(
+                        [{"speaker": "patient", "text": prompt}, {"speaker": "agent", "text": completion.text}],
+                        [f"{row.title}: {row.description or row.text}" for row in guardrails],
+                        jev_client, api_key,
+                    )
+                if classification["breached"]:
+                    violations = classification["violations"]
+                    reason = "; ".join(item["guardrail"].split(":", 1)[0] for item in violations)
+                    await repository.append_event(call_id, "guardrail_breach", {"reason": reason})
+                    update_call(call_id, guardrail_breached=1, guardrail_reason=reason,
+                                guardrail_violations=json.dumps(violations, ensure_ascii=False))
+                    yield AgentResponse(immediate_answer=GUARDRAIL_REFUSAL, tool_calls=[])
+                    return
             speech = _speech_for(completion, batch.refused, language)
             spoke_this_step = bool(speech)
             if speech:
@@ -434,9 +458,10 @@ async def run_agent_turn(
         await asyncio.to_thread(api.close)
 
 
-def _graph_prompt(state: CallGraph, language: Language = DEFAULT_LANGUAGE) -> str:
+def _graph_prompt(state: CallGraph, language: Language = DEFAULT_LANGUAGE, guardrails: str = "") -> str:
+    guardrail_prompt = f"\n\nConfigured guardrails (always follow):\n{guardrails}" if guardrails else ""
     return (
-        f"System prompt:\n{state.graph.system}\n{reply_instruction(language)}\n\n"
+        f"System prompt:\n{state.graph.system}\n{reply_instruction(language)}{guardrail_prompt}\n\n"
         f"{render_context(state)}"
     )
 
