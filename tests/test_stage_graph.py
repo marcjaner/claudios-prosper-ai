@@ -270,3 +270,85 @@ def test_a_failing_tool_becomes_feedback_not_a_dead_turn():
                       {"search_patients": RuntimeError("upstream down")})
 
     assert spoken == ["Checking.", "Sorry, I could not look that up."]
+
+
+# --- the builder's HTTP surface ---------------------------------------------
+
+def test_graph_api_round_trips_and_refuses_a_broken_graph(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import agent.graph as graph_module
+    import agent.graph_api as api_module
+
+    path = tmp_path / "graph.json"
+    monkeypatch.setattr(graph_module, "GRAPH_PATH", path)
+    graph_module.save_graph(parse_graph(TWO_STAGE), path)
+    monkeypatch.setattr(api_module, "load_graph", lambda: graph_module.load_graph(path))
+    monkeypatch.setattr(api_module, "save_graph", lambda graph: graph_module.save_graph(graph, path))
+
+    app = FastAPI()
+    api_module.register_graph_api(app)
+    client = TestClient(app)
+
+    assert client.get("/api/graph").json()["entry"] == "identify"
+    assert len(client.get("/api/tools").json()["tools"]) == 10
+
+    broken = {"entry": "identify", "nodes": [IDENTIFY], "edges": [{"from": "identify", "to": "gone"}]}
+    assert client.put("/api/graph", json=broken).status_code == 400
+    # The rejected save must not have touched the file on disk.
+    assert graph_module.load_graph(path).entry == "identify"
+
+    renamed = {**TWO_STAGE, "nodes": [{**IDENTIFY, "prompt": "Ask for their ID."}, BOOK]}
+    assert client.put("/api/graph", json=renamed).status_code == 200
+    assert graph_module.load_graph(path).node("identify").prompt == "Ask for their ID."
+
+
+# --- failure handling -------------------------------------------------------
+
+def test_a_failed_submission_is_not_retried_in_the_same_turn():
+    """A timeout after the clinic accepted the request must not book twice."""
+    state = two_stage_state()
+    state.facts["patient_id"] = "P1"
+    state.enter("book")
+    repository = FakeRepository()
+    client = FakeClient(
+        says("Booking that.", ("book_appointment", {"patient_id": "P1", "slot": "09:00"})),
+        says("Trying another slot.", ("book_appointment", {"patient_id": "P1", "slot": "10:00"})),
+        says("I could not confirm that booking."),
+    )
+
+    spoken = run_turn("book 9am", state, client, repository,
+                      {"book_appointment": RuntimeError("Response timed out after request acceptance")})
+
+    assert repository.submissions == []
+    assert spoken[-1] == "I could not confirm that booking."
+    # The second attempt was refused, so its promise was never spoken either.
+    assert "Trying another slot." not in spoken
+
+
+def test_provider_wording_never_reaches_the_next_prompt():
+    state = two_stage_state()
+    client = FakeClient(
+        says("Checking.", ("search_patients", {"name": "Ana"})),
+        says("I could not look that up."),
+    )
+
+    run_turn("hi", state, client, FakeRepository(),
+             {"search_patients": RuntimeError("secret clinic details")})
+
+    assert "secret clinic details" not in client.prompts[-1]
+
+
+def test_a_silent_step_still_answers_the_caller():
+    """Ending a turn on a wordless bookkeeping step would leave dead air."""
+    state = two_stage_state()
+    client = FakeClient(
+        says("One moment.", ("search_patients", {"name": "Ana"})),
+        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+    )
+
+    spoken = run_turn("I'm Ana", state, client, FakeRepository(),
+                      {"search_patients": {"patients": [{"id": "P1"}]}})
+
+    assert spoken == ["One moment.", "All set."]

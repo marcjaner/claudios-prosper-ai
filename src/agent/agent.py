@@ -236,13 +236,13 @@ async def run_agent_turn(
     configure_logging()
     _logger.info("starting call agent | call_id=%s prompt=%r", call_id, prompt)
     state = state or CallGraph.start()
-    state.turn += 1
+    state.start_turn()
     state.history.append(HistoryEntry(speaker="caller", text=prompt))
     await repository.append_event(call_id, "caller_text_received", {"text": prompt})
 
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
-    spoke = False
+    spoke_this_step = False
     ending = "waiting"
     try:
         tools = load_tools(create_clinic_tools(api, call_id))
@@ -252,8 +252,8 @@ async def run_agent_turn(
             )
             batch = _plan_batch(completion, state, call_id, step)
             speech = _speech_for(completion, batch.refused)
+            spoke_this_step = bool(speech)
             if speech:
-                spoke = True
                 state.history.append(HistoryEntry(speaker="agent", text=speech))
                 await repository.append_event(call_id, "agent_response", {"text": speech})
                 yield AgentResponse(immediate_answer=speech, tool_calls=[])
@@ -271,7 +271,8 @@ async def run_agent_turn(
         else:
             ending = "budget"
 
-        if ending == "budget" or not spoke:
+        # A turn that ends without speech leaves the caller listening to silence.
+        if ending == "budget" or not spoke_this_step:
             answer = await _final_answer(state, llm_client, event_sink)
             state.history.append(HistoryEntry(speaker="agent", text=answer))
             await repository.append_event(call_id, "agent_follow_up", {"text": answer})
@@ -387,7 +388,7 @@ async def _execute_batch(
     produced_new = False
     for call in batch.business:
         batch.operations.append(
-            await _run_tool(call, tools, call_id, repository, event_sink)
+            await _run_tool(call, state, tools, call_id, repository, event_sink)
         )
         produced_new = True
 
@@ -409,6 +410,7 @@ async def _execute_batch(
 
 async def _run_tool(
     call: Any,
+    state: CallGraph,
     tools: dict[str, dict[str, Any]],
     call_id: str,
     repository: CallRepository,
@@ -436,7 +438,10 @@ async def _run_tool(
         await repository.append_event(
             call_id, "tool_result", {"name": call.name, "output": f"Tool error: {exc}"}
         )
-        return Operation(call.name, call.arguments, "failed", detail=str(exc))
+        # The request may still have been received, so this turn will not repeat it.
+        state.failed_tools.add(call.name)
+        # The model sees that it failed, never the provider's own words.
+        return Operation(call.name, call.arguments, "failed", detail="the request did not complete")
 
     await _emit(
         event_sink,
@@ -465,11 +470,25 @@ async def _final_answer(
     request_id = uuid4().hex
     started_ns = time.perf_counter_ns()
     await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=client.default_model))
-    completion = client.complete(
-        f"{_graph_prompt(state)}\n\n"
-        "Answer the caller now using only what is above. Be concise, never mention "
-        "internal tools or stages, and do not promise anything you have not already done."
-    )
+    try:
+        completion = client.complete(
+            f"{_graph_prompt(state)}\n\n"
+            "Answer the caller now using only what is above. Be concise, never mention "
+            "internal tools or stages, and do not promise anything you have not already done."
+        )
+    except Exception as exc:
+        await _emit(
+            event_sink,
+            LLMRequestFailedFrame(
+                request_id=request_id,
+                model=client.default_model,
+                duration_ms=_duration_ms(started_ns),
+                error_type=type(exc).__name__,
+                error_message="LLM request failed",
+            ),
+        )
+        raise
+
     usage = completion.usage
     await _emit(
         event_sink,
