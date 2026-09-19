@@ -150,7 +150,7 @@ function CallCard({ call, events, now }) {
           : `bg-white ${live ? "border-slate-200" : "border-slate-200 opacity-70"}`
       }`}
     >
-      <a href={`#/call/${call.call_id}`} className="flex flex-1 flex-col rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600">
+      <a href={`#/call/${call.call_id}?from=wall`} className="flex flex-1 flex-col rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600">
         <div className="flex items-start gap-4">
           <DurationRing seconds={seconds} live={live} />
           <div className="min-w-0 flex-1">

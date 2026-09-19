@@ -22,7 +22,7 @@ function useHashRoute() {
   return hash;
 }
 
-const CALL_ROUTE = /^#\/call\/(.+)$/;
+const CALL_ROUTE = /^#\/call\/([^?]+)(?:\?from=(wall|history))?$/;
 
 export default function App() {
   // The live socket stays open on both views, so switching back to the wall
@@ -45,11 +45,13 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const openCall = route.match(CALL_ROUTE)?.[1];
+  const callMatch = route.match(CALL_ROUTE);
+  const openCall = callMatch?.[1];
+  const returnTo = callMatch?.[2] === "wall" ? "#/wall" : "#/historico";
   const view = VIEWS[route] ? route : DEFAULT_VIEW;
   const View = VIEWS[view].component;
   const clinicTheme = Boolean(openCall) || view === "#/wall" || view === "#/historico";
-  const activeView = openCall ? "#/historico" : view;
+  const activeView = openCall ? returnTo : view;
 
   return (
     <div className={`min-h-screen ${clinicTheme ? "clinic-theme bg-[#eef3f1] text-slate-900" : "bg-slate-950 text-slate-200"}`}>
@@ -129,6 +131,7 @@ export default function App() {
           callId={openCall}
           liveCall={calls.get(openCall)}
           liveEvents={events.get(openCall) ?? []}
+          returnTo={returnTo}
         />
       ) : (
         <View calls={calls} events={events} />
