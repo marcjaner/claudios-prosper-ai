@@ -35,6 +35,9 @@ export default function OutcomeHistogram({ histogram, range, onRangeChange, load
   const dateFormat = new Intl.DateTimeFormat("en-GB", {
     day: "2-digit", month: "short", year: "numeric", timeZone: "Europe/Madrid",
   });
+  const rangeFormat = new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium", ...(bucketSeconds < 86400 ? { timeStyle: "short" } : {}), timeZone: "Europe/Madrid",
+  });
   const total = buckets.reduce((sum, bucket) => sum + bucket.total, 0);
   const peak = Math.max(1, ...buckets.map((bucket) => bucket.total));
   const axisMax = Math.ceil(peak / 2) * 2;
@@ -136,7 +139,7 @@ export default function OutcomeHistogram({ histogram, range, onRangeChange, load
           </div>
           <p className="mt-4 min-h-5 text-xs tabular-nums text-slate-500">
             {active ? `${bucketLabel(active)} · ${active.total} calls`
-              : buckets.length ? `${dateFormat.format(new Date((histogram.range_start ?? buckets[0].bucket) * 1000))} – ${dateFormat.format(new Date((histogram.range_end ?? buckets.at(-1).bucket) * 1000))} · Europe/Madrid`
+              : buckets.length ? `${rangeFormat.format(new Date((histogram.range_start ?? buckets[0].bucket) * 1000))} – ${rangeFormat.format(new Date((histogram.range_end ?? buckets.at(-1).bucket) * 1000))} · Europe/Madrid`
                 : "Choose a date range to explore call volume."}
           </p>
           <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-2 border-t border-slate-100 pt-4">
