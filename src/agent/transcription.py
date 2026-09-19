@@ -1,19 +1,19 @@
 from collections.abc import Awaitable, Callable
 
 from loguru import logger
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
-    LocalSmartTurnAnalyzerV3,
-)
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from stt import create_deepgram_stt
+from stt import (
+    DeepgramEndpointingProcessor,
+    DeepgramEndpointingStopStrategy,
+    create_deepgram_stt,
+)
 from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
@@ -29,12 +29,9 @@ async def log_completed_turn(meta: CallMeta, content: str) -> None:
 def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
     params = LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(),
+        user_turn_stop_timeout=30,
         user_turn_strategies=UserTurnStrategies(
-            stop=[
-                TurnAnalyzerUserTurnStopStrategy(
-                    turn_analyzer=LocalSmartTurnAnalyzerV3()
-                )
-            ]
+            stop=[DeepgramEndpointingStopStrategy()]
         ),
     )
     aggregator = LLMContextAggregatorPair(
@@ -56,6 +53,7 @@ def create_transcription_agent(
     async def build_agent(meta: CallMeta):
         processors = [
             create_deepgram_stt(),
+            DeepgramEndpointingProcessor(),
             create_user_aggregator(meta, on_completed_turn),
         ]
         if reply:
