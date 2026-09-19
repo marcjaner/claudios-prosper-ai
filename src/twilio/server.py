@@ -13,6 +13,7 @@ from sqlalchemy.engine import make_url
 
 from observability import EventBus, Store, set_bus
 from observability.api import register_dashboard
+from observability.call_explorer import app as call_explorer_app
 
 from .transport import AgentFactory, run_call
 
@@ -117,6 +118,8 @@ def create_app(
             await run_call(websocket, build_agent, initial_greeting=initial_greeting)
         except Exception:  # noqa: BLE001 - never let one call escape into the server
             logger.exception("unhandled error serving call")
+
+    app.mount("/debug/calls", call_explorer_app)
 
     # The call tester owns /, so the console is mounted under /app.
     register_dashboard(app)
