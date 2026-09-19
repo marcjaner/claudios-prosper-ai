@@ -2,32 +2,41 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import logging
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from agent.llm import LLMClient
-from agent.models import AgentResponse, ToolResult
 from agent.clinic_api import ClinicApi
+from agent.llm import LLMClient, get_llm_client
+from agent.models import AgentResponse, ToolResult
 from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
+
+if TYPE_CHECKING:
+    from storage import CallRepository
 
 _logger = logging.getLogger(__name__)
 
 
 def retrieve_memory() -> str:
-    """Return conversation memory (currently a placeholder)."""
-    _logger.debug("Retrieving conversation memory")
     return ""
 
 
 def _system_prompt() -> str:
-    prompt_file = Path(__file__).with_name("prompts.yaml")
-    with prompt_file.open(encoding="utf-8") as file:
+    with (Path(__file__).with_name("prompts.yaml")).open(encoding="utf-8") as file:
         return yaml.safe_load(file)["system"]
+
+
+def _completion(prompt: str, client: LLMClient | None, tools: dict[str, dict[str, Any]]) -> AgentResponse:
+    message = f"System prompt:\n{_system_prompt()}\n\nMemory:\n{retrieve_memory()}\n\nCaller input:\n{prompt}"
+    return (client or get_llm_client()).complete_structured(
+        message,
+        AgentResponse,
+        extra_body={"tools": [tool["definition"] for tool in tools.values()]},
+    ).data
 
 
 def run_agent(
@@ -37,41 +46,75 @@ def run_agent(
     clinic_api: ClinicApi | None = None,
     call_id: str | None = None,
 ) -> Iterator[str | ToolResult]:
-    """Yield the immediate answer, then yield each tool result as it completes."""
     configure_logging()
-    _logger.info("Starting agent run")
-    _logger.debug("Caller prompt: %s", prompt)
     if (clinic_api is None) != (call_id is None):
         raise ValueError("clinic_api and call_id must be provided together")
     tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
-    message = (
-        f"System prompt:\n{_system_prompt()}\n\n"
-        f"Memory:\n{retrieve_memory()}\n\n"
-        f"Caller input:\n{prompt}"
-    )
-    completion = (client or LLMClient()).complete_structured(
-        message,
-        AgentResponse,
-        extra_body={"tools": [tool["definition"] for tool in tools.values()]},
-    )
-    response = completion.data
-    _logger.info("Agent produced immediate answer and %d tool call(s)", len(response.tool_calls))
-    _logger.debug("Structured agent response: %s", response.model_dump())
+    response = _completion(prompt, client, tools)
     yield response.immediate_answer
-
     for call in response.tool_calls:
-        _logger.info("Executing tool=%s", call.name)
-        _logger.debug("Tool arguments for %s: %s", call.name, call.arguments)
         tool = tools.get(call.name)
         if tool is None:
-            _logger.warning("Unknown tool requested: %s", call.name)
             yield ToolResult(name=call.name, output=f"Unknown tool: {call.name}")
             continue
         try:
-            output: Any = tool["execute"](**call.arguments)
+            output = tool["execute"](**call.arguments)
         except (TypeError, ValueError) as exc:
-            _logger.exception("Tool execution failed: %s", call.name)
             output = f"Tool error: {exc}"
-        _logger.info("Tool completed: %s", call.name)
-        _logger.debug("Tool output for %s: %s", call.name, output)
         yield ToolResult(name=call.name, output=output)
+
+
+async def run_agent_for_call(
+    prompt: str,
+    call_id: str,
+    repository: "CallRepository",
+    client: LLMClient | None = None,
+) -> AgentResponse:
+    responses = [response async for response in run_agent_turn(prompt, call_id, repository, client)]
+    return responses[-1]
+
+
+async def run_agent_turn(
+    prompt: str,
+    call_id: str,
+    repository: "CallRepository",
+    client: LLMClient | None = None,
+):
+    """Yield the immediate reply, then a reply synthesized from tool results."""
+    configure_logging()
+    _logger.info("starting call agent | call_id=%s prompt=%r", call_id, prompt)
+    await repository.append_event(call_id, "caller_text_received", {"text": prompt})
+    memory = await repository.memory_for_call(call_id)
+    api = ClinicApi.from_environment()
+    try:
+        tools = load_tools(create_clinic_tools(api, call_id))
+        response = _completion(f"{prompt}\n\nCall memory:\n{memory}", client, tools)
+        _logger.info("agent response model | call_id=%s response=%s", call_id, response.model_dump())
+        await repository.append_event(call_id, "agent_response", {"text": response.immediate_answer})
+        yield response
+        tool_results = []
+        for call in response.tool_calls:
+            tool = tools.get(call.name)
+            output: Any = f"Unknown tool: {call.name}"
+            if tool:
+                try:
+                    output = tool["execute"](**call.arguments)
+                except (TypeError, ValueError) as exc:
+                    output = f"Tool error: {exc}"
+            await repository.append_event(call_id, "tool_call", {"name": call.name, "arguments": call.arguments})
+            await repository.append_event(call_id, "tool_result", {"name": call.name, "output": output})
+            _logger.info("tool result | call_id=%s tool=%s output=%s", call_id, call.name, output)
+            await repository.record_submission(call_id, call.name.upper(), call.arguments, 200, {"output": output})
+            tool_results.append({"name": call.name, "arguments": call.arguments, "output": output})
+        if tool_results:
+            follow_up = _completion(
+                f"Original caller request:\n{prompt}\n\nTool results:\n{tool_results}\n\n"
+                "Answer the caller using only these tool results. Be concise and do not mention internal tools.",
+                client,
+                {},
+            )
+            _logger.info("agent follow-up model | call_id=%s response=%s", call_id, follow_up.model_dump())
+            await repository.append_event(call_id, "agent_follow_up", {"text": follow_up.immediate_answer})
+            yield follow_up
+    finally:
+        api.close()

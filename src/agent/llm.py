@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import logging
+from functools import lru_cache
 import os
 import time
 from typing import Any, Generic, TypeVar, cast
@@ -275,3 +276,9 @@ class LLMClient:
             ) from exc
 
         return StructuredCompletion(data=data, usage=self._usage_from(response.usage))
+
+
+@lru_cache(maxsize=1)
+def get_llm_client() -> LLMClient:
+    """Return the shared default client for the process."""
+    return LLMClient()

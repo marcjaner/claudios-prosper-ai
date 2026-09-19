@@ -110,3 +110,9 @@ class CallRepository:
                 .order_by(CallEvent.id)
             )
             return list(result)
+
+    async def memory_for_call(self, call_id: str) -> str:
+        events = await self.events_for_call(call_id)
+        return "\n".join(
+            f"{event.event_type}: {event.payload}" for event in events
+        )
