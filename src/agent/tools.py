@@ -10,6 +10,7 @@ from .clinic_models import (
     BookRequest, CancelRequest, OutcomeReason, OutcomeRequest,
     RegisterPatientRequest, RescheduleRequest,
 )
+from .models import Tool
 
 
 class ClinicTools:
@@ -57,13 +58,13 @@ def create_clinic_tools(api: ClinicApi, call_id: str) -> list[Callable[..., Any]
     )]
 
 
-def load_tools(functions: list[Callable[..., Any]]) -> dict[str, dict[str, Any]]:
-    loaded = {}
+def load_tools(functions: list[Callable[..., Any]]) -> dict[str, Tool]:
+    loaded: dict[str, Tool] = {}
     for function in functions:
         hints = get_type_hints(function)
         properties = {name: _json_schema(hints.get(name, str)) for name in inspect.signature(function).parameters}
         required = [name for name, parameter in inspect.signature(function).parameters.items() if parameter.default is inspect.Parameter.empty]
-        loaded[function.__name__] = {"definition": {"type": "function", "function": {"name": function.__name__, "description": inspect.getdoc(function) or "", "parameters": {"type": "object", "properties": properties, "required": required, "additionalProperties": False}}}, "execute": function}
+        loaded[function.__name__] = Tool(name=function.__name__, description=inspect.getdoc(function) or "", parameters={"type": "object", "properties": properties, "required": required, "additionalProperties": False}, execute=function)
     return loaded
 
 

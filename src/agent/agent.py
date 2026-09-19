@@ -11,9 +11,10 @@ import yaml
 
 from agent.clinic_api import ClinicApi
 from agent.llm import LLMClient, get_llm_client
-from agent.models import AgentResponse, ToolResult
+from agent.models import AgentResponse, Tool, ToolResult
 from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
+from agent.workflow import available_tools, update_state
 
 if TYPE_CHECKING:
     from storage import CallRepository
@@ -30,13 +31,18 @@ def _system_prompt() -> str:
         return yaml.safe_load(file)["system"]
 
 
-def _completion(prompt: str, client: LLMClient | None, tools: dict[str, dict[str, Any]]) -> AgentResponse:
+def _completion(prompt: str, client: LLMClient | None, tools: dict[str, Tool]) -> AgentResponse:
     message = f"System prompt:\n{_system_prompt()}\n\nMemory:\n{retrieve_memory()}\n\nCaller input:\n{prompt}"
     return (client or get_llm_client()).complete_structured(
         message,
         AgentResponse,
-        extra_body={"tools": [tool["definition"] for tool in tools.values()]},
+        extra_body={"tools": [tool.definition for tool in tools.values()]},
     ).data
+
+
+def _enabled_tools(tools: dict[str, Tool], state: dict[str, Any]) -> dict[str, Tool]:
+    enabled = available_tools(state)
+    return {name: tool for name, tool in tools.items() if name in enabled}
 
 
 def run_agent(
@@ -50,6 +56,8 @@ def run_agent(
     if (clinic_api is None) != (call_id is None):
         raise ValueError("clinic_api and call_id must be provided together")
     tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
+    state: dict[str, Any] = {}
+    tools = _enabled_tools(tools, state)
     response = _completion(prompt, client, tools)
     yield response.immediate_answer
     for call in response.tool_calls:
@@ -58,7 +66,7 @@ def run_agent(
             yield ToolResult(name=call.name, output=f"Unknown tool: {call.name}")
             continue
         try:
-            output = tool["execute"](**call.arguments)
+            output = tool.execute(**call.arguments)
         except (TypeError, ValueError) as exc:
             output = f"Tool error: {exc}"
         yield ToolResult(name=call.name, output=output)
@@ -87,20 +95,25 @@ async def run_agent_turn(
     memory = await repository.memory_for_call(call_id)
     api = ClinicApi.from_environment()
     try:
-        tools = load_tools(create_clinic_tools(api, call_id))
+        all_tools = load_tools(create_clinic_tools(api, call_id))
+        state = await repository.workflow_for_call(call_id)
+        tools = _enabled_tools(all_tools, state)
         response = _completion(f"{prompt}\n\nCall memory:\n{memory}", client, tools)
         _logger.info("agent response model | call_id=%s response=%s", call_id, response.model_dump())
         await repository.append_event(call_id, "agent_response", {"text": response.immediate_answer})
         yield response
         tool_results = []
         for call in response.tool_calls:
-            tool = tools.get(call.name)
+            tool = _enabled_tools(all_tools, state).get(call.name)
             output: Any = f"Unknown tool: {call.name}"
             if tool:
                 try:
-                    output = tool["execute"](**call.arguments)
+                    output = tool.execute(**call.arguments)
                 except (TypeError, ValueError) as exc:
                     output = f"Tool error: {exc}"
+            if tool and not isinstance(output, str):
+                state = update_state(state, call.name, output)
+                await repository.save_workflow(call_id, state)
             await repository.append_event(call_id, "tool_call", {"name": call.name, "arguments": call.arguments})
             await repository.append_event(call_id, "tool_result", {"name": call.name, "output": output})
             _logger.info("tool result | call_id=%s tool=%s output=%s", call_id, call.name, output)

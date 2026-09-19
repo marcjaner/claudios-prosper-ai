@@ -28,6 +28,8 @@ class Call(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String, default="active")
     final_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    workflow_stage: Mapped[str] = mapped_column(String, default="identify")
+    workflow_state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class CallEvent(Base):
