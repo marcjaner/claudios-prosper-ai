@@ -238,3 +238,6 @@ data/
 # Dashboard
 src/frontend/node_modules/
 src/frontend/dist/
+
+
+src/frontend/package-lock.json
