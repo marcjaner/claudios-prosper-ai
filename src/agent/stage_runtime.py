@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .graph import GO_TO_TOOL, RECORD_FACTS_TOOL, Graph, load_graph
+from .tools import SUBMISSION_TOOL_NAMES
 
 # An action step's speech is written before its own results, so the last step of a
 # turn is always tool-free: otherwise a booking on the final step is never confirmed.
@@ -113,13 +114,15 @@ class CallGraph:
             return self._refuse_transition(str(arguments.get("stage", "")))
         if name not in self.stage.tools:
             return f"{name} is not available in stage {self.stage_id}"
-        if name in self.failed_tools:
-            # A request that failed may still have been received. Repeating it could
-            # book the same patient twice, so the caller decides what happens next.
+        if name in self.failed_tools and name in SUBMISSION_TOOL_NAMES:
+            # A submission that failed may still have been received, so repeating it
+            # could book the same patient twice. A failed lookup may simply be tried
+            # again, which is how a caller survives one flaky directory request.
             return f"{name} already failed once this turn and must not be retried"
         if self.signature(name, arguments) in self.calls_made:
-            # The answer is already in the conversation, and repeating it would
-            # spend the turn's budget saying nothing new.
+            # The answer is already in the conversation against a read-only EHR,
+            # so repeating it would spend the turn's budget saying nothing new.
+            # Only calls that succeeded are recorded, so a failed read may retry.
             return f"{name} was already called with these arguments this turn"
         return ""
 

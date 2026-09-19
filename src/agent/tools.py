@@ -70,6 +70,14 @@ CLINIC_TOOL_NAMES = (
 )
 
 
+# Tools that POST a record to Prosper. A failed one may still have been received,
+# which is what makes retrying it dangerous; a failed lookup carries no such doubt.
+SUBMISSION_TOOL_NAMES = frozenset({
+    "register_patient", "book_appointment", "reschedule_appointment",
+    "cancel_appointment", "submit_no_action", "escalate_to_human",
+})
+
+
 def create_clinic_tools(api: ClinicApi, call_id: str) -> list[Callable[..., Any]]:
     tools = ClinicTools(api, call_id)
     return [getattr(tools, name) for name in CLINIC_TOOL_NAMES]

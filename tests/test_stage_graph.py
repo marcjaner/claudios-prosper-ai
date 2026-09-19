@@ -49,8 +49,9 @@ class FakeClient:
         from agent.llm import StructuredCompletion
         from agent.models import AgentResponse
 
+        answer = "   " if getattr(self, "blank_final", False) else "All set."
         return StructuredCompletion(
-            data=AgentResponse(immediate_answer="All set."), usage=Usage()
+            data=AgentResponse(immediate_answer=answer), usage=Usage()
         )
 
 
@@ -90,6 +91,8 @@ def run_turn(prompt, state, client, repository, tool_outputs=None):
         def make(name):
             def call(**kwargs):
                 result = outputs.get(name, {"ok": True})
+                if callable(result):
+                    return result(**kwargs)
                 if isinstance(result, Exception):
                     raise result
                 return result
@@ -368,3 +371,76 @@ def test_an_identical_call_is_not_repeated_within_a_turn():
                       {"search_patients": {"patients": []}})
 
     assert spoken == ["Un momento.", "All set."]
+
+
+def test_a_second_booking_in_the_same_batch_is_refused_after_the_first_fails():
+    """Planning judged the batch before any of it ran; the guard must run again."""
+    state = two_stage_state()
+    state.facts["patient_id"] = "P1"
+    state.enter("book")
+    repository = FakeRepository()
+    client = FakeClient(
+        says("Booking that.",
+             ("book_appointment", {"patient_id": "P1", "slot": "09:00"}),
+             ("book_appointment", {"patient_id": "P1", "slot": "10:00"})),
+        says("I could not confirm the booking."),
+    )
+
+    attempts = []
+
+    def timing_out(**kwargs):
+        attempts.append(kwargs)
+        raise RuntimeError("Response timed out after request acceptance")
+
+    run_turn("book me in", state, client, repository, {"book_appointment": timing_out})
+
+    assert len(attempts) == 1
+    assert repository.submissions == []
+
+
+def test_a_failed_lookup_may_be_tried_again_but_a_failed_submission_may_not():
+    state = two_stage_state()
+    state.failed_tools.add("search_patients")
+    state.failed_tools.add("book_appointment")
+
+    assert state.refuse_reason("search_patients", {"name": "Ana"}) == ""
+    state.enter("book")
+    assert state.refuse_reason("book_appointment", {"patient_id": "P1"})
+
+
+def test_a_failed_call_is_not_remembered_as_already_answered():
+    state = two_stage_state()
+    client = FakeClient(
+        says("Checking.", ("search_patients", {"name": "Ana"})),
+        says("Trying again.", ("search_patients", {"name": "Ana"})),
+        says("Found you."),
+    )
+
+    calls = []
+
+    def flaky(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("timeout")
+        return {"patients": [{"id": "P1"}]}
+
+    spoken = run_turn("Soy Ana", state, client, FakeRepository(), {"search_patients": flaky})
+
+    assert len(calls) == 2
+    assert spoken[-1] == "Found you."
+
+
+def test_a_blank_final_answer_still_says_something():
+    from agent.agent import NO_ANSWER_FALLBACK
+
+    state = two_stage_state()
+    client = FakeClient(
+        says("Checking.", ("search_patients", {"name": "Ana"})),
+        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+    )
+    client.blank_final = True
+
+    spoken = run_turn("Soy Ana", state, client, FakeRepository(),
+                      {"search_patients": {"patients": [{"id": "P1"}]}})
+
+    assert spoken[-1] == NO_ANSWER_FALLBACK

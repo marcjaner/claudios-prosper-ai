@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   addEdge,
   Background,
@@ -12,8 +12,16 @@ import {
 import "@xyflow/react/dist/style.css";
 
 // Fact keys are edited as free text, so the same splitter serves every list field.
+// It runs when editing finishes, never per keystroke: splitting as you type eats
+// the comma you just pressed and silently welds two keys into one.
 const splitKeys = (text) =>
   text.split(",").map((key) => key.trim()).filter(Boolean);
+
+// React Flow derives edge ids from the endpoints, so renaming a stage and reusing
+// its old name produces two different edges sharing one id — and deleting one
+// would delete both. These ids are independent of the names.
+let edgeSequence = 0;
+const nextEdgeId = () => `edge_${(edgeSequence += 1)}`;
 
 function StageNode({ id, data, selected }) {
   return (
@@ -49,6 +57,22 @@ function StageNode({ id, data, selected }) {
 
 const nodeTypes = { stage: StageNode };
 
+function KeyList({ value, draft, setDraft, onCommit, placeholder }) {
+  return (
+    <input
+      value={draft ?? value.join(", ")}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={(event) => {
+        setDraft(null);
+        onCommit(splitKeys(event.target.value));
+      }}
+      onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+      placeholder={placeholder}
+      className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 p-2 font-mono text-sm text-slate-200"
+    />
+  );
+}
+
 const toFlowNodes = (graph) =>
   graph.nodes.map((node) => ({
     id: node.id,
@@ -63,8 +87,8 @@ const toFlowNodes = (graph) =>
   }));
 
 const toFlowEdges = (graph) =>
-  graph.edges.map((edge, index) => ({
-    id: `${edge.from}->${edge.to}-${index}`,
+  graph.edges.map((edge) => ({
+    id: nextEdgeId(),
     source: edge.from,
     target: edge.to,
     label: (edge.requires ?? []).join(", ") || "sin requisitos",
@@ -83,6 +107,7 @@ export default function Builder() {
   const [status, setStatus] = useState("");
   // Renaming on every keystroke would forbid clearing the field to retype.
   const [draftId, setDraftId] = useState(null);
+  const [draftKeys, setDraftKeys] = useState(null);
 
   useEffect(() => {
     Promise.all([
@@ -102,6 +127,7 @@ export default function Builder() {
         addEdge(
           {
             ...connection,
+            id: nextEdgeId(),
             label: "sin requisitos",
             data: { requires: [] },
             labelStyle: { fill: "#94a3b8", fontSize: 11 },
@@ -147,7 +173,10 @@ export default function Builder() {
   };
 
   const addStage = () => {
-    const id = `etapa_${nodes.length + 1}`;
+    const taken = new Set(nodes.map((node) => node.id));
+    let index = nodes.length + 1;
+    while (taken.has(`etapa_${index}`)) index += 1;
+    const id = `etapa_${index}`;
     setNodes((current) => [
       ...current,
       {
@@ -248,9 +277,13 @@ export default function Builder() {
           onConnect={onConnect}
           onNodeClick={(_, clicked) => {
             setDraftId(null);
+            setDraftKeys(null);
             setSelected({ kind: "node", id: clicked.id });
           }}
-          onEdgeClick={(_, clicked) => setSelected({ kind: "edge", id: clicked.id })}
+          onEdgeClick={(_, clicked) => {
+            setDraftKeys(null);
+            setSelected({ kind: "edge", id: clicked.id });
+          }}
           onPaneClick={() => setSelected(null)}
           fitView
           colorMode="dark"
@@ -328,11 +361,12 @@ export default function Builder() {
               <span className="text-xs uppercase tracking-wide text-slate-500">
                 Olvida al entrar
               </span>
-              <input
-                value={node.data.clears.join(", ")}
-                onChange={(event) => patchNode(node.id, { clears: splitKeys(event.target.value) })}
+              <KeyList
+                value={node.data.clears}
+                draft={draftKeys}
+                setDraft={setDraftKeys}
+                onCommit={(keys) => patchNode(node.id, { clears: keys })}
                 placeholder="p. ej. slot, policy_id"
-                className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 p-2 font-mono text-sm text-slate-200"
               />
             </label>
           </div>
@@ -347,11 +381,12 @@ export default function Builder() {
               <span className="text-xs uppercase tracking-wide text-slate-500">
                 Datos necesarios
               </span>
-              <input
-                value={(edge.data?.requires ?? []).join(", ")}
-                onChange={(event) => patchEdge(edge.id, splitKeys(event.target.value))}
+              <KeyList
+                value={edge.data?.requires ?? []}
+                draft={draftKeys}
+                setDraft={setDraftKeys}
+                onCommit={(keys) => patchEdge(edge.id, keys)}
                 placeholder="p. ej. patient_id"
-                className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 p-2 font-mono text-sm text-slate-200"
               />
               <span className="mt-1 block text-[11px] text-slate-600">
                 El agente no puede pasar a {edge.target} hasta que haya registrado estos datos.

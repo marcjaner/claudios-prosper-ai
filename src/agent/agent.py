@@ -53,6 +53,7 @@ SENSITIVE_ARGUMENT_MARKERS = {
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
 TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
+NO_ANSWER_FALLBACK = "Perdone, ¿puede repetirme lo que necesita?"
 
 
 def retrieve_memory() -> str:
@@ -346,7 +347,6 @@ def _plan_batch(completion: ToolCompletion, state: CallGraph, call_id: str, step
                     "key": key, "value": value,
                 })
         else:
-            state.calls_made.add(state.signature(call.name, call.arguments))
             batch.business.append(call)
 
     for index, call in enumerate(transitions):
@@ -384,9 +384,23 @@ async def _execute_batch(
     """Run the clinic tools, then commit the transition. Returns whether anything is new."""
     produced_new = False
     for call in batch.business:
-        batch.operations.append(
-            await _run_tool(call, state, tools, call_id, repository, event_sink)
-        )
+        # Planning judged the whole batch before any of it ran. An earlier call in
+        # this same batch may have just failed, so the guard runs again here.
+        late_refusal = state.refuse_reason(call.name, call.arguments)
+        if late_refusal:
+            batch.refused = True
+            batch.operations.append(
+                Operation(call.name, call.arguments, "refused", detail=late_refusal)
+            )
+            emit(call_id, "tool_rejected", {
+                "turn": state.turn, "step": step, "stage": state.stage_id,
+                "requested": call.name, "reason": late_refusal,
+            })
+            continue
+        operation = await _run_tool(call, state, tools, call_id, repository, event_sink)
+        batch.operations.append(operation)
+        if operation.status == "executed":
+            state.calls_made.add(state.signature(call.name, call.arguments))
         produced_new = True
 
     if batch.transition is not None:
@@ -471,7 +485,8 @@ async def _final_answer(
         client,
         event_sink,
     )
-    return response.immediate_answer.strip()
+    # A structurally valid but blank answer would still leave the caller in silence.
+    return response.immediate_answer.strip() or NO_ANSWER_FALLBACK
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:
