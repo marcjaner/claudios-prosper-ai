@@ -63,6 +63,7 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+data/*.db
 
 # Flask stuff:
 instance/
@@ -225,11 +226,14 @@ outputs/
 
 # Coding
 .zcode/
+
 # Call observability
 *.db
 *.db-shm
 *.db-wal
 recordings/
+# Where main's debug bundles and the agent's SQLite land by default.
+data/
 
 # Dashboard
 src/frontend/node_modules/

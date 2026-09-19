@@ -16,6 +16,19 @@ uv run python scripts/stt_smoke.py path/to/audio.wav
 
 The smoke test requires `ffmpeg` on `PATH`.
 
+## Transcript server
+
+Start the production transport with per-call Deepgram STT and user-turn
+aggregation:
+
+```shell
+PYTHONPATH=src uv run python -m agent
+```
+
+Each completed caller turn is emitted from Pipecat's `on_user_turn_stopped`
+event and currently logged with its `call_id`. This server is the transcript
+boundary for the future LLM layer; it intentionally has no TTS response yet.
+
 ## Twilio transport
 
 `src/twilio/` is the WebSocket server the harness dials. It owns the wire and
@@ -28,11 +41,13 @@ and output:
 ```python
 from twilio import CallMeta, create_app
 
+
 async def build_agent(meta: CallMeta):
     # meta.call_id      goes in every /api/v1/submit/* request
     # meta.from_number  may be None; a hint, never an identification
     # meta.connected_at Europe/Madrid; relative dates resolve against it
     return [stt, agent, tts]
+
 
 app = create_app(build_agent)
 ```
@@ -47,7 +62,21 @@ transport can be exercised before there is an API key to dial the real one.
 Run the server with the echo agent, which needs no STT or TTS:
 
 ```shell
-uv run python -m twilio
+PYTHONPATH=src uv run python -m twilio
+```
+
+For an interactive local call, open [http://localhost:7860](http://localhost:7860)
+in a browser after starting the server. It uses your microphone and sends the
+same `connected`, `start`, `media`, and `stop` messages that Twilio Media
+Streams sends to `/ws`. Use headphones to prevent the agent's playback from
+feeding back into the microphone.
+
+The page also includes a read-only local database viewer. To see the sample
+storage data, seed it and point the server at that SQLite file:
+
+```shell
+PYTHONPATH=src uv run python scripts/storage_smoke.py
+DATABASE_URL=sqlite+aiosqlite:///data/storage-smoke.db PYTHONPATH=src uv run python -m twilio
 ```
 
 ```shell

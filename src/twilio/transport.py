@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from loguru import logger
-from pipecat.frames.frames import AudioRawFrame, Frame
+from pipecat.frames.frames import Frame, OutputAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -18,6 +18,7 @@ from pipecat.workers.runner import WorkerRunner
 from observability import emit, update_call
 
 from .handshake import CallMeta, read_handshake
+from .recording import create_call_artifacts
 from .serializer import create_serializer
 
 PIPELINE_SAMPLE_RATE = 16_000
@@ -45,15 +46,18 @@ class CallMetrics:
             return None
         return round(self.first_audio_out_at - self.started_at, 3)
 
-    def log(self) -> None:
+    def summary(self) -> dict:
         # Silence from us is attributed to us and fails the case, so time to
         # first audio is the number worth watching on every call.
-        summary = {
+        return {
             "call_id": self.call_id,
             "duration_seconds": round(time.monotonic() - self.started_at, 3),
             "time_to_first_audio_seconds": self.time_to_first_audio,
             "audio_out_seconds": round(self.audio_out_bytes / (TTS_SAMPLE_RATE * 2), 3),
         }
+
+    def log(self) -> None:
+        summary = self.summary()
         if self.first_audio_out_at is None:
             logger.error("call said nothing | {}", json.dumps(summary))
         else:
@@ -69,7 +73,10 @@ class OutboundAudioTap(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        if isinstance(frame, AudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
+        if (
+            isinstance(frame, OutputAudioRawFrame)
+            and direction == FrameDirection.DOWNSTREAM
+        ):
             if self._call_metrics.first_audio_out_at is None:
                 self._call_metrics.first_audio_out_at = time.monotonic()
                 update_call(self._call_metrics.call_id, state="speaking")
@@ -108,6 +115,9 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
         meta.from_number or "<withheld>",
     )
     metrics = CallMetrics(call_id=meta.call_id, started_at=time.monotonic())
+    artifacts = None
+    outcome = "completed"
+    failure: str | None = None
     # connected_at is wall clock; CallMetrics.started_at is monotonic and means
     # nothing to a browser drawing a duration ring.
     update_call(
@@ -117,15 +127,18 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
         from_number=meta.from_number,
     )
 
-    failure: str | None = None
     try:
         transport = create_transport(websocket, meta)
+        agent = await build_agent(meta)
+        artifacts = create_call_artifacts(meta)
+        # After transport.output(), where both directions of audio pass.
         pipeline = Pipeline(
             [
                 transport.input(),
-                *await build_agent(meta),
+                *agent,
                 OutboundAudioTap(metrics),
                 transport.output(),
+                *([artifacts.recorder] if artifacts else []),
             ]
         )
         worker = PipelineWorker(
@@ -137,7 +150,10 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
             idle_timeout_secs=IDLE_TIMEOUT_SECONDS,
             cancel_on_idle_timeout=True,
             cancel_runner_on_idle_timeout=False,
+            observers=[artifacts.timeline] if artifacts else None,
         )
+        if artifacts:
+            artifacts.attach_turn_tracker(worker.turn_tracking_observer)
 
         # Nothing tears the pipeline down when the caller hangs up. Without
         # this the worker lives until the idle timeout, holding a socket and a
@@ -150,12 +166,16 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
         await runner.add_workers(worker)
         await asyncio.wait_for(runner.run(), timeout=MAX_CALL_SECONDS)
     except TimeoutError:
+        outcome = "timeout"
         failure = f"call exceeded {MAX_CALL_SECONDS}s"
         logger.error("call exceeded {}s | call_id={}", MAX_CALL_SECONDS, meta.call_id)
     except Exception as error:  # noqa: BLE001 - one call must never take down the others
+        outcome = "failed"
         failure = str(error)
         logger.exception("call failed | call_id={}", meta.call_id)
     finally:
+        if artifacts:
+            artifacts.finish(outcome, metrics.summary())
         metrics.log()
         # Teardown runs under cancellation, so anything that must be recorded
         # belongs here rather than in a pipeline event handler.
