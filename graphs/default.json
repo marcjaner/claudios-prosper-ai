@@ -18,26 +18,27 @@
       ],
       "position": {
         "x": 0,
-        "y": 200
+        "y": 160
       }
     },
     {
       "id": "registrar",
-      "prompt": "Quien llama no está en el directorio. La respuesta es darle de alta, no una cita: recoge nombre, dos apellidos, DNI, fecha de nacimiento, teléfono, email y aseguradora, y envíalos con register_patient. Un paciente que no está en la ficha no puede reservar, así que no reserves nada después. Comprueba la letra del DNI con el paciente antes de enviarlo.",
+      "prompt": "Todavía no sabes a quién se refiere la llamada. Puede que el paciente exista y hayas oído mal un dato, o que de verdad sea nuevo.\n- Repite la búsqueda con los datos corregidos y confirma un segundo dato (fecha de nacimiento o teléfono). Si aparece, registra patient_id y pasa a atender.\n- Pregunta también si llama por otra persona: puede que el paciente sí esté aunque quien llama no lo esté.\n- Solo si de verdad es un paciente nuevo, recoge nombre, dos apellidos, DNI, fecha de nacimiento, teléfono, email y aseguradora, y envíalos con register_patient. Comprueba la letra del DNI antes de enviarlo. Una vez registrado, la llamada termina ahí: un paciente nuevo no se puede citar.",
       "tools": [
+        "search_patients",
         "register_patient",
         "submit_no_action",
         "escalate_to_human"
       ],
       "clears": [],
       "position": {
-        "x": 330,
-        "y": 40
+        "x": 300,
+        "y": 0
       }
     },
     {
       "id": "atender",
-      "prompt": "Ya sabes quién llama. Averigua qué necesita y si la clínica puede hacerlo.\n- Consulta get_clinic_catalogue para los identificadores y las restricciones reales.\n- Para una cita nueva: busca con search_availability y, cuando el paciente acepte una hora concreta que haya devuelto la clínica, registra slot_elegido con esa hora exacta y su zona horaria, y pasa a reservar.\n- Para cambiar o anular: usa get_patient_appointments, registra appointment_id de la cita afectada y pasa a modificar. Solo las citas futuras se pueden tocar.\n- Si una norma de la clínica lo impide, no busques excusas: envía submit_no_action con el motivo exacto que corresponda.\n- Si llama por otra persona distinta, vuelve a identificar.",
+      "prompt": "Ya sabes quién llama. Averigua qué necesita y si la clínica puede hacerlo.\n- Consulta get_clinic_catalogue para los identificadores y las restricciones reales.\n- Para una cita nueva: busca con search_availability y, cuando el paciente acepte una hora concreta que haya devuelto la clínica, registra slot_elegido con esa hora exacta y su zona horaria, y pasa a reservar.\n- Para cambiar o anular: usa get_patient_appointments, registra appointment_id de la cita afectada y pasa a modificar. Solo las citas futuras se pueden tocar.\n- Si una norma de la clínica lo impide, no busques excusas: envía submit_no_action con el motivo exacto que corresponda.",
       "tools": [
         "get_clinic_catalogue",
         "get_patient_appointments",
@@ -50,8 +51,8 @@
         "slot_elegido"
       ],
       "position": {
-        "x": 330,
-        "y": 200
+        "x": 300,
+        "y": 300
       }
     },
     {
@@ -66,8 +67,8 @@
       ],
       "clears": [],
       "position": {
-        "x": 680,
-        "y": 120
+        "x": 620,
+        "y": 200
       }
     },
     {
@@ -84,8 +85,8 @@
       ],
       "clears": [],
       "position": {
-        "x": 680,
-        "y": 300
+        "x": 620,
+        "y": 420
       }
     }
   ],
@@ -119,19 +120,11 @@
       ]
     },
     {
-      "from": "reservar",
+      "from": "registrar",
       "to": "atender",
-      "requires": []
-    },
-    {
-      "from": "modificar",
-      "to": "atender",
-      "requires": []
-    },
-    {
-      "from": "atender",
-      "to": "identificar",
-      "requires": []
+      "requires": [
+        "patient_id"
+      ]
     }
   ]
 }
