@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from collections.abc import Sequence
+from datetime import date
+from typing import Any, cast
 
 import httpx
 
@@ -23,6 +25,9 @@ class ProsperApiError(RuntimeError):
         self.status_code = status_code
         self.detail = detail
         super().__init__(f"Prosper API returned {status_code}: {detail}")
+
+
+MAX_AVAILABILITY_DAYS = 14
 
 
 class ClinicApi:
@@ -85,7 +90,9 @@ class ClinicApi:
     def get_patient_appointments(
         self, patient_id: str, *, when: str = "upcoming"
     ) -> dict[str, Any]:
-        return self._get(f"/api/v1/patients/{patient_id}/appointments", params={"when": when})
+        return self._get(
+            f"/api/v1/patients/{patient_id}/appointments", params={"when": when}
+        )
 
     def search_availability(
         self,
@@ -96,8 +103,14 @@ class ClinicApi:
         specialty_id: str | None = None,
         location_id: str | None = None,
         patient_id: str | None = None,
-        insurers: list[str] | None = None,
+        insurers: Sequence[str] | None = None,
     ) -> dict[str, Any]:
+        self._validate_availability_range(date_from, date_to)
+        if not provider_id and not specialty_id:
+            raise ValueError(
+                "search_availability requires either provider_id or specialty_id. "
+                "Use an exact ID from get_clinic_catalogue."
+            )
         params: list[tuple[str, str]] = [
             ("date_from", date_from),
             ("date_to", date_to),
@@ -113,6 +126,26 @@ class ClinicApi:
         )
         params.extend(("insurer", insurer) for insurer in insurers or [])
         return self._get("/api/v1/availability", params=params)
+
+    @staticmethod
+    def _validate_availability_range(date_from: str, date_to: str) -> None:
+        try:
+            start = date.fromisoformat(date_from)
+            end = date.fromisoformat(date_to)
+        except ValueError as error:
+            raise ValueError(
+                "date_from and date_to must use YYYY-MM-DD format."
+            ) from error
+
+        days = (end - start).days + 1
+        if days < 1:
+            raise ValueError("date_to must be on or after date_from.")
+        if days > MAX_AVAILABILITY_DAYS:
+            raise ValueError(
+                f"Availability ranges may contain at most {MAX_AVAILABILITY_DAYS} "
+                f"inclusive days; this request contains {days}. Retry with a "
+                "shorter date_to."
+            )
 
     def get_submissions(self, *, limit: int = 50) -> dict[str, Any]:
         return self._get("/api/v1/submissions", params={"limit": str(limit)})
@@ -141,7 +174,7 @@ class ClinicApi:
         *,
         params: dict[str, str] | list[tuple[str, str]] | None = None,
     ) -> dict[str, Any]:
-        response = self._client.get(path, params=params)
+        response = self._client.get(path, params=cast(Any, params))
         return self._response_json(response)
 
     def _post(self, path: str, request: Any) -> dict[str, Any]:

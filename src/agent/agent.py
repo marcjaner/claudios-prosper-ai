@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import yaml
 from pipecat.frames.frames import SystemFrame
 
-from agent.clinic_api import ClinicApi
+from agent.clinic_api import ClinicApi, ProsperApiError
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, ToolCall, ToolResult
 from agent.tools import create_clinic_tools, load_tools
@@ -41,6 +44,8 @@ SENSITIVE_ARGUMENT_MARKERS = {
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
 TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
+MAX_TOOL_ROUNDS = 3
+CLINIC_TIMEZONE = ZoneInfo("Europe/Madrid")
 
 
 def retrieve_memory() -> str:
@@ -53,8 +58,10 @@ def _system_prompt() -> str:
 
 
 def _completion_prompt(prompt: str) -> str:
+    current_date = datetime.now(CLINIC_TIMEZONE).date().isoformat()
     return (
         f"System prompt:\n{_system_prompt()}\n\n"
+        f"Current date in Europe/Madrid: {current_date}\n\n"
         f"Memory:\n{retrieve_memory()}\n\nCaller input:\n{prompt}"
     )
 
@@ -172,7 +179,7 @@ async def _observed_completion(
             cached_tokens=usage.cached_tokens,
         ),
     )
-    return completion.data
+    return cast(AgentResponse, completion.data)
 
 
 def run_agent(
@@ -247,110 +254,176 @@ async def run_agent_turn(
         )
         yield response
 
-        tool_results = []
-        for call in response.tool_calls:
-            tool_call_id = uuid4().hex
-            started_ns = time.perf_counter_ns()
-            await _emit(
-                event_sink,
-                ToolCallStartedFrame(
-                    tool=call.name,
-                    tool_call_id=tool_call_id,
-                    arguments=_safe_arguments(call.arguments),
-                ),
-            )
-            tool = tools.get(call.name)
-            output: Any = f"Unknown tool: {call.name}"
-            if tool is None:
-                await _emit_tool_error(
-                    event_sink,
+        tool_history: list[dict[str, Any]] = []
+        for tool_round in range(MAX_TOOL_ROUNDS):
+            if not response.tool_calls:
+                return
+
+            for call in response.tool_calls:
+                output = await _execute_tool_call(
+                    call, tools.get(call.name), event_sink
+                )
+                result = {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "output": output,
+                }
+                tool_history.append(result)
+                await repository.append_event(
+                    call_id,
+                    "tool_call",
+                    {"name": call.name, "arguments": call.arguments},
+                )
+                await repository.append_event(
+                    call_id, "tool_result", {"name": call.name, "output": output}
+                )
+                _logger.info(
+                    "tool result | call_id=%s tool=%s output=%s",
+                    call_id,
                     call.name,
-                    tool_call_id,
-                    started_ns,
-                    "UnknownToolError",
-                    "Unknown tool",
+                    output,
+                )
+                await repository.record_submission(
+                    call_id,
+                    call.name.upper(),
+                    call.arguments,
+                    _tool_status_code(output),
+                    {"output": output},
+                )
+
+            follow_up_prompt = _tool_follow_up_prompt(prompt, memory, tool_history)
+            if tool_round == MAX_TOOL_ROUNDS - 1:
+                follow_up = await _observed_completion(
+                    follow_up_prompt
+                    + "\n\nThe tool-call limit is reached. Do not request another tool. "
+                    "Explain the problem briefly or ask for the one missing detail.",
+                    llm_client,
+                    {},
+                    event_sink,
                 )
             else:
-                try:
-                    output = await asyncio.to_thread(tool["execute"], **call.arguments)
-                except (TypeError, ValueError) as exc:
-                    await _emit_tool_error(
-                        event_sink,
-                        call.name,
-                        tool_call_id,
-                        started_ns,
-                        type(exc).__name__,
-                        "Tool execution failed",
-                    )
-                    output = f"Tool error: {exc}"
-                except Exception as exc:
-                    await _emit_tool_error(
-                        event_sink,
-                        call.name,
-                        tool_call_id,
-                        started_ns,
-                        type(exc).__name__,
-                        "Tool execution failed",
-                    )
-                    raise
-                else:
-                    await _emit(
-                        event_sink,
-                        ToolCallFinishedFrame(
-                            tool=call.name,
-                            tool_call_id=tool_call_id,
-                            duration_ms=_duration_ms(started_ns),
-                            status="success",
-                            result_summary=_result_summary(output),
-                        ),
-                    )
-            await repository.append_event(
-                call_id,
-                "tool_call",
-                {"name": call.name, "arguments": call.arguments},
-            )
-            await repository.append_event(
-                call_id, "tool_result", {"name": call.name, "output": output}
-            )
-            _logger.info(
-                "tool result | call_id=%s tool=%s output=%s",
-                call_id,
-                call.name,
-                output,
-            )
-            await repository.record_submission(
-                call_id,
-                call.name.upper(),
-                call.arguments,
-                200,
-                {"output": output},
-            )
-            tool_results.append(
-                {"name": call.name, "arguments": call.arguments, "output": output}
-            )
-        if tool_results:
-            follow_up = await _observed_completion(
-                f"Original caller request:\n{prompt}\n\n"
-                f"Tool results:\n{tool_results}\n\n"
-                "Answer the caller using only these tool results. "
-                "Be concise and do not mention internal tools.",
-                llm_client,
-                {},
-                event_sink,
-            )
+                follow_up = await _observed_tool_completion(
+                    follow_up_prompt, llm_client, tools, event_sink
+                )
+
             _logger.info(
                 "agent follow-up model | call_id=%s response=%s",
                 call_id,
                 follow_up.model_dump(),
             )
+            if follow_up.tool_calls and tool_round < MAX_TOOL_ROUNDS - 1:
+                response = follow_up
+                continue
+            if follow_up.tool_calls:
+                follow_up = follow_up.model_copy(update={"tool_calls": []})
+
             await repository.append_event(
                 call_id,
                 "agent_follow_up",
                 {"text": follow_up.immediate_answer},
             )
             yield follow_up
+            return
     finally:
         await asyncio.to_thread(api.close)
+
+
+async def _execute_tool_call(
+    call: ToolCall,
+    tool: dict[str, Any] | None,
+    event_sink: EventSink | None,
+) -> Any:
+    tool_call_id = uuid4().hex
+    started_ns = time.perf_counter_ns()
+    await _emit(
+        event_sink,
+        ToolCallStartedFrame(
+            tool=call.name,
+            tool_call_id=tool_call_id,
+            arguments=_safe_arguments(call.arguments),
+        ),
+    )
+    try:
+        if tool is None:
+            raise LookupError(f"Unknown tool {call.name!r}.")
+        output = await asyncio.to_thread(tool["execute"], **call.arguments)
+    except Exception as error:  # noqa: BLE001 - errors are returned for correction
+        await _emit_tool_error(
+            event_sink,
+            call.name,
+            tool_call_id,
+            started_ns,
+            type(error).__name__,
+            "Tool execution failed",
+        )
+        return _tool_error_output(error)
+
+    await _emit(
+        event_sink,
+        ToolCallFinishedFrame(
+            tool=call.name,
+            tool_call_id=tool_call_id,
+            duration_ms=_duration_ms(started_ns),
+            status="success",
+            result_summary=_result_summary(output),
+        ),
+    )
+    return output
+
+
+def _tool_error_output(error: Exception) -> dict[str, Any]:
+    instruction = (
+        "Correct the arguments using the tool schema and call the tool again. "
+        "Do not repeat the same invalid arguments."
+    )
+    if isinstance(error, ProsperApiError):
+        return {
+            "ok": False,
+            "error": "Prosper rejected the tool arguments.",
+            "status_code": error.status_code,
+            "detail": error.detail,
+            "instruction": instruction,
+        }
+    if isinstance(error, (TypeError, ValueError, LookupError)):
+        return {
+            "ok": False,
+            "error": type(error).__name__,
+            "detail": str(error),
+            "instruction": instruction,
+        }
+    return {
+        "ok": False,
+        "error": type(error).__name__,
+        "detail": "The tool failed unexpectedly; no private error details are exposed.",
+        "instruction": (
+            "Retry once if the call is safe to repeat. If it fails again, tell the "
+            "caller the request cannot be completed right now."
+        ),
+    }
+
+
+def _tool_follow_up_prompt(
+    caller_request: str,
+    memory: str,
+    tool_history: list[dict[str, Any]],
+) -> str:
+    return (
+        f"Original caller request:\n{caller_request}\n\n"
+        f"Call memory:\n{memory}\n\n"
+        f"Tool execution history:\n{json.dumps(tool_history, ensure_ascii=False)}\n\n"
+        "Continue from the tool results. A result with ok=false is an error, not a "
+        "successful action: follow its instruction and retry with corrected arguments. "
+        "Never repeat an identical failed call or repeat an action that already succeeded. "
+        "If you have enough successful data, answer the caller concisely without mentioning "
+        "internal tools. If correction needs caller information, ask one question."
+    )
+
+
+def _tool_status_code(output: Any) -> int:
+    if isinstance(output, dict) and output.get("ok") is False:
+        status_code = output.get("status_code")
+        return status_code if isinstance(status_code, int) else 500
+    return 200
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:
