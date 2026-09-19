@@ -13,8 +13,8 @@ import yaml
 from pipecat.frames.frames import SystemFrame
 
 from agent.clinic_api import ClinicApi
-from agent.llm import LLMClient, get_llm_client
-from agent.models import AgentResponse, ToolResult
+from agent.llm import LLMClient, ToolCompletion, get_llm_client
+from agent.models import AgentResponse, ToolCall, ToolResult
 from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
 from observability.frames import (
@@ -39,6 +39,7 @@ SENSITIVE_ARGUMENT_MARKERS = {
     "token",
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
+TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
 
 
 def retrieve_memory() -> str:
@@ -60,15 +61,69 @@ def _completion_prompt(prompt: str) -> str:
 def _completion(
     prompt: str, client: LLMClient | None, tools: dict[str, dict[str, Any]]
 ) -> AgentResponse:
-    return (
-        (client or get_llm_client())
-        .complete_structured(
-            _completion_prompt(prompt),
-            AgentResponse,
-            extra_body={"tools": [tool["definition"] for tool in tools.values()]},
-        )
-        .data
+    completion = (client or get_llm_client()).complete_with_tools(
+        _completion_prompt(prompt),
+        [tool["definition"] for tool in tools.values()],
     )
+    return _agent_response(completion)
+
+
+def _agent_response(completion: ToolCompletion) -> AgentResponse:
+    tool_calls = [
+        ToolCall(name=call.name, arguments=call.arguments)
+        for call in completion.tool_calls
+    ]
+    answer = completion.text.strip()
+    if tool_calls and not answer:
+        answer = TOOL_ACKNOWLEDGEMENT
+    if not answer:
+        raise ValueError("LLM returned neither text nor tool calls.")
+    return AgentResponse(immediate_answer=answer, tool_calls=tool_calls)
+
+
+async def _observed_tool_completion(
+    prompt: str,
+    client: LLMClient,
+    tools: dict[str, dict[str, Any]],
+    event_sink: EventSink | None,
+) -> AgentResponse:
+    request_id = uuid4().hex
+    model = client.default_model
+    started_ns = time.perf_counter_ns()
+    await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=model))
+    try:
+        completion = client.complete_with_tools(
+            _completion_prompt(prompt),
+            [tool["definition"] for tool in tools.values()],
+        )
+    except Exception as exc:
+        await _emit(
+            event_sink,
+            LLMRequestFailedFrame(
+                request_id=request_id,
+                model=model,
+                duration_ms=_duration_ms(started_ns),
+                error_type=type(exc).__name__,
+                error_message="LLM request failed",
+            ),
+        )
+        raise
+
+    usage = completion.usage
+    await _emit(
+        event_sink,
+        LLMResponseFinishedFrame(
+            request_id=request_id,
+            model=model,
+            duration_ms=_duration_ms(started_ns),
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            cached_tokens=usage.cached_tokens,
+        ),
+    )
+    return _agent_response(completion)
 
 
 async def _observed_completion(
@@ -176,7 +231,7 @@ async def run_agent_turn(
     llm_client = client or get_llm_client()
     try:
         tools = load_tools(create_clinic_tools(api, call_id))
-        response = await _observed_completion(
+        response = await _observed_tool_completion(
             f"{prompt}\n\nCall memory:\n{memory}", llm_client, tools, event_sink
         )
         _logger.info(

@@ -9,7 +9,13 @@ from pipecat.processors.frame_processor import FrameDirection
 import agent.reply as reply_module
 from agent.agent import run_agent_turn
 from agent.clinic_api import ClinicApi
-from agent.llm import LLMClient, StructuredCompletion, Usage
+from agent.llm import (
+    LLMClient,
+    LLMToolCall,
+    StructuredCompletion,
+    ToolCompletion,
+    Usage,
+)
 from agent.models import AgentResponse, ToolCall
 from agent.reply import AgentReply
 from observability.frames import (
@@ -59,19 +65,40 @@ class FakeLLMClient:
     def __init__(self, responses: list[AgentResponse | Exception]):
         self._responses = iter(responses)
 
+    @staticmethod
+    def _usage():
+        return Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            reasoning_tokens=2,
+            cached_tokens=3,
+        )
+
+    def complete_with_tools(self, *args, **kwargs):
+        response = next(self._responses)
+        if isinstance(response, Exception):
+            raise response
+        return ToolCompletion(
+            text=response.immediate_answer,
+            tool_calls=[
+                LLMToolCall(
+                    call_id=f"call-{index}",
+                    name=call.name,
+                    arguments=call.arguments,
+                )
+                for index, call in enumerate(response.tool_calls)
+            ],
+            usage=self._usage(),
+        )
+
     def complete_structured(self, *args, **kwargs):
         response = next(self._responses)
         if isinstance(response, Exception):
             raise response
         return StructuredCompletion(
             data=response,
-            usage=Usage(
-                prompt_tokens=10,
-                completion_tokens=5,
-                total_tokens=15,
-                reasoning_tokens=2,
-                cached_tokens=3,
-            ),
+            usage=self._usage(),
         )
 
 
@@ -137,7 +164,7 @@ def test_tool_turn_observes_initial_and_follow_up_llm_requests(monkeypatch):
         monkeypatch,
         [
             AgentResponse(
-                immediate_answer="Let me check.",
+                immediate_answer="",
                 tool_calls=[
                     ToolCall(name="search_patients", arguments={"name": "Ana"})
                 ],
@@ -169,7 +196,7 @@ def test_tool_turn_observes_initial_and_follow_up_llm_requests(monkeypatch):
     assert frames[4].request_id == frames[5].request_id
     assert frames[0].request_id != frames[4].request_id
     assert [response.immediate_answer for response in replies] == [
-        "Let me check.",
+        "Let me check that for you.",
         "I found your record.",
     ]
 
