@@ -1,25 +1,16 @@
 import asyncio
-from datetime import datetime
 from typing import Any, cast
-from zoneinfo import ZoneInfo
 
 import pytest
 from pipecat.frames.frames import LLMContextFrame, TTSSpeakFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 
+import agent.reply
 import observability
-from agent.clinic_api import ClinicApi
+from agent.models import AgentResponse
 from agent.reply import AGENT_ERROR_REPLY, AgentReply
-from twilio import CallMeta
-
-
-class FakeClinicApi:
-    def __init__(self):
-        self.is_closed = False
-
-    def close(self):
-        self.is_closed = True
+from observability.frames import TTSRequestedFrame
 
 
 class FakeBus:
@@ -43,21 +34,12 @@ def bus():
 
 
 class CapturingAgentReply(AgentReply):
-    def __init__(self, meta, clinic_api, runner):
-        super().__init__(meta, cast(ClinicApi, clinic_api), runner=runner)
+    def __init__(self, call_id, repository):
+        super().__init__(call_id, repository)
         self.emitted = []
 
     async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
         self.emitted.append(frame)
-
-
-def make_meta() -> CallMeta:
-    return CallMeta(
-        call_id="CA456",
-        stream_sid="MZ123",
-        from_number="+34612345678",
-        connected_at=datetime(2026, 9, 19, 10, tzinfo=ZoneInfo("Europe/Madrid")),
-    )
 
 
 def make_context() -> LLMContext:
@@ -70,61 +52,91 @@ def make_context() -> LLMContext:
     )
 
 
-def test_agent_reply_runs_real_agent_with_call_context(bus):
-    async def run():
-        calls = []
-        clinic_api = FakeClinicApi()
-        meta = make_meta()
+def fake_runner(calls, responses=None, error=None):
+    async def runner(prompt, call_id, repository, **kwargs):
+        calls.append((prompt, call_id, repository, kwargs))
+        if error is not None:
+            raise error
+        for response in responses or []:
+            yield response
 
-        def runner(prompt, client, *, clinic_api, call_id):
-            calls.append((prompt, client, clinic_api, call_id))
-            yield "Claro. ¿Qué día le viene bien?"
+    return runner
 
-        processor = CapturingAgentReply(meta, clinic_api, runner)
-        await processor.process_frame(
+
+def test_agent_reply_speaks_every_turn_response(monkeypatch, bus):
+    calls = []
+    repository = object()
+    responses = [
+        AgentResponse(immediate_answer="Un momento."),
+        AgentResponse(immediate_answer="Reservada para el jueves."),
+    ]
+    monkeypatch.setattr(agent.reply, "run_agent_turn", fake_runner(calls, responses))
+    processor = CapturingAgentReply("CA456", repository)
+
+    asyncio.run(
+        processor.process_frame(
             LLMContextFrame(make_context()), FrameDirection.DOWNSTREAM
         )
-        await processor.cleanup()
-        return calls, clinic_api, processor.emitted
+    )
 
-    calls, clinic_api, emitted = asyncio.run(run())
-
-    prompt, client, captured_api, call_id = calls[0]
-    assert "2026-09-19" in prompt
-    assert "Caller ID hint: +34612345678" in prompt
-    assert "assistant: ¿De qué especialidad?" in prompt
-    assert "user: Dermatología." in prompt
-    assert client is None
-    assert captured_api is clinic_api
+    prompt, call_id, captured_repo, _kwargs = calls[0]
     assert call_id == "CA456"
-    assert isinstance(emitted[0], TTSSpeakFrame)
-    assert emitted[0].text == "Claro. ¿Qué día le viene bien?"
-    assert clinic_api.is_closed is True
+    assert captured_repo is repository
+    assert prompt == "Dermatología."
 
-    kinds = [kind for _, kind, _ in bus.events]
-    assert ("CA456", "tts", {"text": "Claro. ¿Qué día le viene bien?"}) in bus.events
-    assert "error" not in kinds
+    requested = [f for f in processor.emitted if isinstance(f, TTSRequestedFrame)]
+    spoken = [f for f in processor.emitted if isinstance(f, TTSSpeakFrame)]
+    assert [f.text for f in requested] == [
+        "Un momento.",
+        "Reservada para el jueves.",
+    ]
+    assert [f.text for f in spoken] == [
+        "Un momento.",
+        "Reservada para el jueves.",
+    ]
+
+    tts = [e for e in bus.events if e[1] == "tts"]
+    assert tts == [
+        ("CA456", "tts", {"text": "Un momento."}),
+        ("CA456", "tts", {"text": "Reservada para el jueves."}),
+    ]
     states = [fields.get("state") for _, fields in bus.updates]
-    assert states == ["thinking", "speaking"]
+    assert states == ["thinking", "speaking", "speaking"]
 
 
-def test_agent_reply_falls_back_without_ending_the_call(bus):
-    async def run():
-        clinic_api = FakeClinicApi()
+def test_agent_reply_falls_back_without_ending_the_call(monkeypatch, bus):
+    calls = []
+    monkeypatch.setattr(
+        agent.reply,
+        "run_agent_turn",
+        fake_runner(calls, error=RuntimeError("LLM exploded")),
+    )
+    processor = CapturingAgentReply("CA456", object())
 
-        def runner(prompt, client, *, clinic_api, call_id):
-            raise RuntimeError("LLM exploded")
-            yield
-
-        processor = CapturingAgentReply(make_meta(), clinic_api, runner)
-        await processor.process_frame(
+    asyncio.run(
+        processor.process_frame(
             LLMContextFrame(make_context()), FrameDirection.DOWNSTREAM
         )
-        return processor.emitted
+    )
 
-    emitted = asyncio.run(run())
-
-    assert isinstance(emitted[0], TTSSpeakFrame)
-    assert emitted[0].text == AGENT_ERROR_REPLY
+    requested = [f for f in processor.emitted if isinstance(f, TTSRequestedFrame)]
+    spoken = [f for f in processor.emitted if isinstance(f, TTSSpeakFrame)]
+    assert [f.text for f in requested] == [AGENT_ERROR_REPLY]
+    assert [f.text for f in spoken] == [AGENT_ERROR_REPLY]
     assert ("CA456", "error", {"message": "LLM exploded"}) in bus.events
     assert ("CA456", "tts", {"text": AGENT_ERROR_REPLY}) in bus.events
+
+
+def test_speculative_context_is_forwarded_without_running(monkeypatch, bus):
+    calls = []
+    monkeypatch.setattr(agent.reply, "run_agent_turn", fake_runner(calls))
+    processor = CapturingAgentReply("CA456", object())
+    frame = LLMContextFrame(make_context())
+    frame.speculation = True
+
+    asyncio.run(processor.process_frame(frame, FrameDirection.DOWNSTREAM))
+
+    assert calls == []
+    assert processor.emitted == [frame]
+    assert not bus.events
+    assert not bus.updates

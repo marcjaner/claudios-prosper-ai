@@ -1,36 +1,23 @@
-import asyncio
-from collections.abc import Callable, Iterator
+import logging
 
-from loguru import logger
-from pipecat.frames.frames import Frame, LLMContextFrame, TTSSpeakFrame
+from pipecat.frames.frames import Frame, LLMContextFrame, SystemFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from observability import emit, update_call
-from twilio import CallMeta
+from observability.frames import TTSRequestedFrame
 
-from .agent import run_agent
-from .clinic_api import ClinicApi
-from .llm import LLMClient
-from .models import ToolResult
+from .agent import run_agent_turn
+
+logger = logging.getLogger(__name__)
 
 AGENT_ERROR_REPLY = "Lo siento, no he podido procesarlo. ¿Puede repetirlo?"
-AgentRunner = Callable[..., Iterator[str | ToolResult]]
 
 
 class AgentReply(FrameProcessor):
-    def __init__(
-        self,
-        meta: CallMeta,
-        clinic_api: ClinicApi,
-        *,
-        client: LLMClient | None = None,
-        runner: AgentRunner = run_agent,
-    ):
+    def __init__(self, call_id, repository):
         super().__init__()
-        self._meta = meta
-        self._clinic_api = clinic_api
-        self._client = client
-        self._runner = runner
+        self.call_id = call_id
+        self.repository = repository
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -38,56 +25,38 @@ class AgentReply(FrameProcessor):
             await self.push_frame(frame, direction)
             return
 
-        prompt = self._conversation_prompt(frame)
-        update_call(self._meta.call_id, state="thinking")
-        try:
-            events = await asyncio.to_thread(
-                lambda: list(
-                    self._runner(
-                        prompt,
-                        self._client,
-                        clinic_api=self._clinic_api,
-                        call_id=self._meta.call_id,
-                    )
-                )
-            )
-            answer = next(event for event in events if isinstance(event, str))
-        except Exception as error:  # noqa: BLE001 - one failed turn must not end the call
-            logger.exception("agent turn failed | call_id={}", self._meta.call_id)
-            emit(self._meta.call_id, "error", {"message": str(error)})
-            answer = AGENT_ERROR_REPLY
-
-        emit(self._meta.call_id, "tts", {"text": answer})
-        update_call(self._meta.call_id, state="speaking")
-        await self.push_frame(TTSSpeakFrame(answer), FrameDirection.DOWNSTREAM)
-
-    async def cleanup(self):
-        self._clinic_api.close()
-        await super().cleanup()
-
-    def _conversation_prompt(self, frame: LLMContextFrame) -> str:
-        lines = [
-            f"Call connected at {self._meta.connected_at.isoformat()}.",
-            f"Caller ID hint: {self._meta.from_number or 'withheld'}.",
-            "Conversation:",
-        ]
-        for message in frame.context.messages:
-            if not isinstance(message, dict):
-                continue
-            role = message.get("role")
-            text = self._message_text(message.get("content"))
-            if role and text:
-                lines.append(f"{role}: {text}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _message_text(content) -> str:
-        if isinstance(content, str):
-            return content
+        messages = getattr(frame.context, "messages", [])
+        content = messages[-1].get("content", "") if messages else ""
         if isinstance(content, list):
-            return " ".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            content = " ".join(
+                part.get("text", "") for part in content if isinstance(part, dict)
             )
-        return ""
+        logger.info("agent turn received | call_id=%s prompt=%r", self.call_id, content)
+        update_call(self.call_id, state="thinking")
+        try:
+            async for response in run_agent_turn(
+                content,
+                self.call_id,
+                self.repository,
+                event_sink=self._emit_event,
+            ):
+                logger.info(
+                    "agent response ready | call_id=%s answer=%r tool_calls=%s",
+                    self.call_id,
+                    response.immediate_answer,
+                    len(response.tool_calls),
+                )
+                await self._speak(response.immediate_answer)
+        except Exception as error:
+            logger.exception("agent turn failed | call_id=%s", self.call_id)
+            emit(self.call_id, "error", {"message": str(error)})
+            await self._speak(AGENT_ERROR_REPLY)
+
+    async def _speak(self, text: str) -> None:
+        emit(self.call_id, "tts", {"text": text})
+        update_call(self.call_id, state="speaking")
+        await self.push_frame(TTSRequestedFrame(text), FrameDirection.DOWNSTREAM)
+        await self.push_frame(TTSSpeakFrame(text), FrameDirection.DOWNSTREAM)
+
+    async def _emit_event(self, frame: SystemFrame) -> None:
+        await self.push_frame(frame, FrameDirection.DOWNSTREAM)

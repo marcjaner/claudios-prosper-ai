@@ -1,9 +1,6 @@
+import logging
 from collections.abc import Awaitable, Callable
 
-from loguru import logger
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
-    LocalSmartTurnAnalyzerV3,
-)
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import Frame, InterimTranscriptionFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -11,23 +8,30 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from observability import emit, update_call
-from stt import create_deepgram_stt
+from storage import CallRepository, Database
+from stt import (
+    DeepgramEndpointingStopStrategy,
+    DeepgramEOTCoordinator,
+    create_deepgram_stt,
+)
 from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
-from .clinic_api import ClinicApi
 from .reply import AgentReply
 
+logger = logging.getLogger(__name__)
+
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
+USER_TURN_STOP_TIMEOUT_SECONDS = 6
 
 
 async def log_completed_turn(meta: CallMeta, content: str) -> None:
-    logger.info("completed user turn | call_id={} text={}", meta.call_id, content)
+    logger.info("completed user turn | call_id=%s text=%s", meta.call_id, content)
 
 
 class TranscriptObserver(FrameProcessor):
@@ -43,50 +47,53 @@ class TranscriptObserver(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-def create_context_aggregators(
-    meta: CallMeta, on_completed_turn: CompletedTurnCallback
-) -> LLMContextAggregatorPair:
+def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
     params = LLMUserAggregatorParams(
-        vad_analyzer=SileroVADAnalyzer(),
+        user_turn_stop_timeout=USER_TURN_STOP_TIMEOUT_SECONDS,
         user_turn_strategies=UserTurnStrategies(
-            stop=[
-                TurnAnalyzerUserTurnStopStrategy(
-                    turn_analyzer=LocalSmartTurnAnalyzerV3()
-                )
-            ]
+            stop=[DeepgramEndpointingStopStrategy()]
         ),
     )
-    aggregators = LLMContextAggregatorPair(
+    aggregator = LLMContextAggregatorPair(
         LLMContext(), user_params=params, realtime_service_mode=False
-    )
-    user_aggregator = aggregators.user()
+    ).user()
 
-    @user_aggregator.event_handler("on_user_turn_stopped")
+    @aggregator.event_handler("on_user_turn_stopped")
     async def _on_user_turn_stopped(_aggregator, _strategy, message):
+        logger.info(
+            "user turn stopped | call_id=%s content=%r", meta.call_id, message.content
+        )
         if message.content:
             emit(meta.call_id, "stt_final", {"text": message.content})
             update_call(meta.call_id, state="thinking")
             await on_completed_turn(meta, message.content)
 
-    return aggregators
-
-
-def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
-    return create_context_aggregators(meta, on_completed_turn).user()
+    return aggregator
 
 
 def create_transcription_agent(
     on_completed_turn: CompletedTurnCallback = log_completed_turn,
 ) -> AgentFactory:
     async def build_agent(meta: CallMeta):
-        aggregators = create_context_aggregators(meta, on_completed_turn)
-        return [
+        logger.info("building call pipeline | call_id=%s", meta.call_id)
+        database = Database()
+        await database.init()
+        repository = CallRepository(database)
+        await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
+        processors = [
+            VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
+            DeepgramEOTCoordinator(),
             TranscriptObserver(meta),
-            aggregators.user(),
-            AgentReply(meta, ClinicApi.from_environment()),
+            create_user_aggregator(meta, on_completed_turn),
+            AgentReply(meta.call_id, repository),
             create_tts(),
-            aggregators.assistant(),
         ]
+        logger.info(
+            "call pipeline ready | call_id=%s processors=%s",
+            meta.call_id,
+            len(processors),
+        )
+        return processors
 
     return build_agent

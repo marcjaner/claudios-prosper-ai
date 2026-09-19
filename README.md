@@ -27,10 +27,10 @@ conversation scoring; `TYPESAFE_DEFAULT_MODEL` defaults to `jev-latest`:
 PYTHONPATH=src uv run python -m agent
 ```
 
-Each call runs Deepgram STT, end-of-turn detection, the booking agent with
-the Prosper clinic tools, and TTS. Once the server is up, the call tester is
-at [http://localhost:7860](http://localhost:7860) and the observability
-console at [http://localhost:7860/app](http://localhost:7860/app).
+Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
+with the Prosper clinic tools, and TTS. Once the server is up, the call
+tester is at [http://localhost:7860](http://localhost:7860) and the
+observability console at [http://localhost:7860/app](http://localhost:7860/app).
 
 ## Twilio transport
 

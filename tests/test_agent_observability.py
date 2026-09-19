@@ -1,11 +1,17 @@
+import asyncio
 from typing import Any, cast
 
 import pytest
 
 import observability
-from agent.agent import run_agent
+from agent.agent import run_agent, run_agent_turn
 from agent.clinic_api import ClinicApi, ProsperApiError
-from agent.llm import StructuredCompletion, Usage
+from agent.llm import (
+    LLMToolCall,
+    StructuredCompletion,
+    ToolCompletion,
+    Usage,
+)
 from agent.models import AgentResponse, ToolCall, ToolResult
 
 
@@ -33,8 +39,16 @@ class FakeClient:
     def __init__(self, response: AgentResponse):
         self._response = response
 
-    def complete_structured(self, prompt, schema, **kwargs):
-        return StructuredCompletion(data=self._response, usage=Usage())
+    def complete_with_tools(self, prompt, tools, **kwargs):
+        response = self._response
+        return ToolCompletion(
+            text=response.immediate_answer,
+            tool_calls=[
+                LLMToolCall(call_id=str(i), name=c.name, arguments=c.arguments)
+                for i, c in enumerate(response.tool_calls)
+            ],
+            usage=Usage(),
+        )
 
 
 class FakeClinicApi:
@@ -218,3 +232,172 @@ def test_run_agent_without_call_id_emits_nothing():
         run_agent("hola", cast(Any, FakeClient(AgentResponse(immediate_answer="Hola."))))
     )
     assert events == ["Hola."]
+
+
+BOOK_ARGS = {
+    "patient_id": "P00042",
+    "provider_id": "PR05",
+    "location_id": "sur",
+    "appointment_type_id": "review",
+    "slot": "2026-09-24T16:30:00+02:00",
+    "policy_id": "sanitas",
+}
+
+
+class FakeRepository:
+    def __init__(self):
+        self.events = []
+        self.submissions = []
+
+    async def append_event(self, call_id, event_type, payload):
+        self.events.append((call_id, event_type, payload))
+
+    async def memory_for_call(self, call_id):
+        return ""
+
+    async def record_submission(
+        self, call_id, action, request, response_status, response
+    ):
+        self.submissions.append((call_id, action, request, response_status, response))
+
+
+class FakeTurnClient:
+    default_model = "fake"
+
+    def __init__(self, response: AgentResponse):
+        self._response = response
+
+    def complete_with_tools(self, prompt, tools, **kwargs):
+        return ToolCompletion(
+            text=self._response.immediate_answer,
+            tool_calls=[
+                LLMToolCall(call_id=str(i), name=c.name, arguments=c.arguments)
+                for i, c in enumerate(self._response.tool_calls)
+            ],
+            usage=Usage(),
+        )
+
+    def complete_structured(self, prompt, schema, **kwargs):
+        return StructuredCompletion(
+            data=AgentResponse(immediate_answer="Hecho."), usage=Usage()
+        )
+
+
+def run_turn(monkeypatch, response, api):
+    monkeypatch.setattr(
+        ClinicApi, "from_environment", classmethod(lambda cls: api)
+    )
+    repository = FakeRepository()
+    client = cast(Any, FakeTurnClient(response))
+
+    async def collect():
+        return [
+            item
+            async for item in run_agent_turn(
+                "hola", "CA456", cast(Any, repository), client
+            )
+        ]
+
+    return asyncio.run(collect()), repository
+
+
+def test_turn_book_emits_tool_events_outcome_and_one_submission(
+    monkeypatch, bus
+):
+    responses, repository = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="Un momento.",
+            tool_calls=[ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
+        ),
+        FakeClinicApi(results={"book_appointment": {"record": {"id": "A1"}}}),
+    )
+
+    tool_call = next(e for e in bus.events if e[1] == "tool_call")
+    tool_result = next(e for e in bus.events if e[1] == "tool_result")
+    assert tool_call[2]["name"] == "book_appointment"
+    assert tool_result[2]["tool_call_id"] == tool_call[2]["tool_call_id"]
+    assert tool_result[2]["status"] == 200
+    assert tool_result[2]["response"] == {"record": {"id": "A1"}}
+
+    update = next(u for u in bus.updates if "outcome" in u[1])
+    assert update[1]["outcome"] == "BOOK"
+    assert update[1]["patient_id"] == "P00042"
+
+    assert [s[1] for s in repository.submissions] == ["BOOK"]
+    submission = repository.submissions[0]
+    assert submission[3] == 200
+    assert submission[2]["patient_id"] == "P00042"
+    assert len(responses) == 2
+
+
+def test_turn_book_failure_records_no_outcome_or_submission(monkeypatch, bus):
+    responses, repository = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="Un momento.",
+            tool_calls=[ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
+        ),
+        FakeClinicApi(fail_with=ProsperApiError(422, {"detail": "slot taken"})),
+    )
+
+    tool_result = next(e for e in bus.events if e[1] == "tool_result")
+    assert tool_result[2]["status"] == 422
+    assert "422" in tool_result[2]["error"]
+    assert not any(e[1] == "submit" for e in bus.events)
+    assert not any("outcome" in fields for _, fields in bus.updates)
+    assert repository.submissions == []
+    assert len(responses) == 2
+
+
+def test_turn_search_identifies_patient_without_submission(monkeypatch, bus):
+    responses, repository = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="Ya la tengo.",
+            tool_calls=[ToolCall(name="search_patients", arguments={"name": "Ana"})],
+        ),
+        FakeClinicApi(
+            results={
+                "search_patients": {
+                    "matches": [
+                        {
+                            "patient_id": "P00042",
+                            "given_name": "Ana",
+                            "first_surname": "García",
+                            "second_surname": "López",
+                            "insurer": "sanitas",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+
+    update = next(u for u in bus.updates if "patient_id" in u[1])
+    assert update[1]["patient_id"] == "P00042"
+    assert update[1]["patient_name"] == "Ana García López"
+    assert repository.submissions == []
+    assert len(responses) == 2
+
+
+def test_turn_no_action_records_reason_and_outcome(monkeypatch, bus):
+    responses, repository = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="No hay huecos.",
+            tool_calls=[
+                ToolCall(
+                    name="submit_no_action",
+                    arguments={"reason": "no_availability"},
+                )
+            ],
+        ),
+        FakeClinicApi(),
+    )
+
+    update = next(u for u in bus.updates if "outcome" in u[1])
+    assert update[1]["outcome"] == "NO_ACTION"
+    assert update[1]["reason"] == "no_availability"
+    assert [s[1] for s in repository.submissions] == ["NO_ACTION"]
+    assert len(responses) == 2
