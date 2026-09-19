@@ -1,12 +1,10 @@
-"""Call a chat model through Helmcode's OpenAI-compatible API."""
+"""Call the configured OpenAI-compatible chat model."""
 
 from __future__ import annotations
 
-import os
-
 from pydantic import BaseModel
 
-from agent.llm import LLMClient
+from agent.llm import get_llm_client
 
 
 class MathAnswer(BaseModel):
@@ -15,7 +13,7 @@ class MathAnswer(BaseModel):
 
 
 if __name__ == "__main__":
-    client = LLMClient(os.getenv("HELMCODE_MODEL", "deepseek-v4-flash"))
+    client = get_llm_client()
 
     result = client.complete("What is 2+2?")
     print(result.text)

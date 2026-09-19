@@ -18,10 +18,12 @@ The smoke test requires `ffmpeg` on `PATH`.
 
 ## Voice agent
 
-Configure `PLATFORM_API_KEY`, `PLATFORM_API_BASE_URL`, `HELMCODE_API_KEY`,
-`DEEPGRAM_API_KEY`, and the selected TTS provider in `.env`, then start the
-full voice pipeline. `TYPESAFE_API_KEY` is optional and enables historical
-conversation scoring; `TYPESAFE_DEFAULT_MODEL` defaults to `jev-latest`:
+Configure `PLATFORM_API_KEY`, `PLATFORM_API_BASE_URL`, `DEEPGRAM_API_KEY`, the
+selected TTS provider, and either `HELMCODE_API_KEY` or `OPENAI_API_KEY` in
+`.env`, then start the full voice pipeline. OpenAI also requires
+`OPENAI_MODEL`; `OPENAI_REASONING_EFFORT=minimal` enables minimal reasoning.
+`TYPESAFE_API_KEY` is optional and enables historical conversation scoring;
+`TYPESAFE_DEFAULT_MODEL` defaults to `jev-latest`:
 
 ```shell
 PYTHONPATH=src uv run python -m agent
