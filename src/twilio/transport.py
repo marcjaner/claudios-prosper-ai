@@ -77,6 +77,7 @@ class OutboundAudioTap(FrameProcessor):
             isinstance(frame, OutputAudioRawFrame)
             and direction == FrameDirection.DOWNSTREAM
         ):
+            logger.debug("outbound audio frame | call_id=%s bytes=%s", self._call_metrics.call_id, len(frame.audio))
             if self._call_metrics.first_audio_out_at is None:
                 self._call_metrics.first_audio_out_at = time.monotonic()
                 update_call(self._call_metrics.call_id, state="speaking")
