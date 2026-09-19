@@ -1,8 +1,12 @@
 import asyncio
+import contextlib
+import json
+import sqlite3
 from datetime import datetime
 
 import pytest
 
+import observability
 from observability import CallUpdate, Event, EventBus, Store
 from observability.store import CLINIC_TIMEZONE
 
@@ -47,6 +51,59 @@ def test_update_call_upserts_and_keeps_earlier_fields(store):
     assert call["ended_at"] == 42.0
 
 
+def test_save_score_persists_result_and_clears_error(store):
+    store.write([CallUpdate("CA1", {"started_at": 1.0, "ended_at": 2.0})])
+    result = {
+        "overall": 62.5,
+        "model": "jev-latest",
+        "scored_at": 123.0,
+        "dimensions": {"resolution": {"score": 3}},
+    }
+    store.save_score("CA1", result=result)
+
+    call = store.get_call("CA1")
+    assert call is not None
+    assert call["score_overall"] == 62.5
+    assert call["score_error"] is None
+    assert json.loads(call["score_json"]) == result
+
+    store.save_score("CA1", error="jev down")
+    call = store.get_call("CA1")
+    assert call is not None
+    assert call["score_overall"] is None
+    assert call["score_json"] is None
+    assert call["score_error"] == "jev down"
+
+
+def test_save_score_does_not_create_a_call(store):
+    store.save_score("GHOST", result={"overall": 1.0})
+    assert store.get_call("GHOST") is None
+
+
+def test_migration_gives_score_overall_real_affinity(tmp_path):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE calls (call_id TEXT PRIMARY KEY, started_at REAL NOT NULL)"
+        )
+
+    store = Store(path)
+    affinity = {
+        row[1]: row[2].upper()
+        for row in store._writer.execute("PRAGMA table_info(calls)")
+    }
+    assert affinity["score_overall"] == "REAL"
+    assert affinity["score_json"] == "TEXT"
+    assert affinity["score_error"] == "TEXT"
+
+    store.write([CallUpdate("CA1", {"started_at": 1.0})])
+    store.save_score("CA1", result={"overall": 87.5})
+    call = store.get_call("CA1")
+    assert call is not None
+    assert call["score_overall"] == 87.5
+    store.close()
+
+
 def test_unknown_fields_never_reach_sql(store):
     store.write([CallUpdate("CA1", {"started_at": 1.0, "; DROP TABLE calls": "x"})])
     assert store.get_call("CA1") is not None
@@ -84,6 +141,47 @@ def test_bus_delivers_to_store_and_subscribers(store):
         assert len(delivered) == 2
 
     asyncio.run(scenario())
+
+
+def test_emit_from_a_worker_thread_reaches_subscribers_and_store(store):
+    async def scenario():
+        bus = EventBus(store)
+        observability.set_bus(bus)
+        task = asyncio.create_task(bus.run())
+        while bus._loop is None:
+            await asyncio.sleep(0)
+        async def persisted():
+            while True:
+                call = store.get_call("CA1")
+                if call and call["state"] == "thinking":
+                    return
+                await asyncio.sleep(0)
+
+        try:
+            with bus.subscribe() as queue:
+                await asyncio.to_thread(
+                    observability.emit, "CA1", "stt_final", {"text": "hola"}
+                )
+                await asyncio.to_thread(
+                    observability.update_call, "CA1", state="thinking"
+                )
+                delivered = [
+                    await asyncio.wait_for(queue.get(), timeout=1),
+                    await asyncio.wait_for(queue.get(), timeout=1),
+                ]
+                await asyncio.wait_for(persisted(), timeout=1)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            observability.set_bus(None)
+        return delivered
+
+    delivered = asyncio.run(scenario())
+
+    assert [event["kind"] for event in store.get_events("CA1")] == ["stt_final"]
+    assert store.get_call("CA1")["state"] == "thinking"
+    assert len(delivered) == 2
 
 
 def test_a_full_queue_drops_instead_of_blocking(store):
@@ -246,3 +344,86 @@ def test_history_filters_by_day_in_clinic_time(store):
     # date_to is inclusive of its whole day, so a call at 23:30 still counts.
     assert sorted(c["call_id"] for c in same_day) == ["EARLY", "LATE"]
     assert len(store.list_calls(date_from="2026-09-18")) == 3
+
+
+def test_histogram_counts_a_reasoned_close_as_a_record(store):
+    # NO_ACTION with a reason scores like a booking; only an empty record
+    # always fails. Colouring them alike would misread a passing run.
+    base = datetime(2026, 9, 19, 10, 0, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                "A", {"started_at": base, "ended_at": base + 1, "outcome": "BOOK"}
+            ),
+            CallUpdate(
+                "B",
+                {
+                    "started_at": base + 60,
+                    "ended_at": base + 61,
+                    "outcome": "NO_ACTION",
+                    "reason": "no_availability",
+                },
+            ),
+            CallUpdate(
+                "C",
+                {
+                    "started_at": base + 120,
+                    "ended_at": base + 121,
+                    "outcome": "ESCALATE",
+                    "reason": "medical_emergency",
+                },
+            ),
+            CallUpdate("D", {"started_at": base + 180, "ended_at": base + 181}),
+        ]
+    )
+    totals = store.histogram()["buckets"]
+    assert sum(b["wrote"] for b in totals) == 1
+    assert sum(b["closed"] for b in totals) == 2
+    assert sum(b["absent"] for b in totals) == 1
+
+
+def test_histogram_buckets_widen_with_the_span(store):
+    base = datetime(2026, 9, 19, 10, 0, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                f"C{i}", {"started_at": base + i * 30, "ended_at": base + i * 30 + 1}
+            )
+            for i in range(10)
+        ]
+    )
+    assert store.histogram()["bucket_seconds"] == 60
+
+    store.write(
+        [CallUpdate("FAR", {"started_at": base + 40 * 3600, "ended_at": base + 1})]
+    )
+    # Forty hours cannot be drawn in one-minute bars, so the ladder steps up.
+    assert store.histogram()["bucket_seconds"] > 60
+
+
+def test_histogram_honours_the_same_filters_as_the_table(store):
+    base = datetime(2026, 9, 19, 10, 0, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                "A",
+                {
+                    "started_at": base,
+                    "ended_at": base + 1,
+                    "outcome": "BOOK",
+                    "insurer": "sanitas",
+                },
+            ),
+            CallUpdate(
+                "B",
+                {
+                    "started_at": base + 60,
+                    "ended_at": base + 61,
+                    "outcome": "BOOK",
+                    "insurer": "adeslas",
+                },
+            ),
+        ]
+    )
+    only = store.histogram(insurer="sanitas")["buckets"]
+    assert sum(b["wrote"] for b in only) == 1

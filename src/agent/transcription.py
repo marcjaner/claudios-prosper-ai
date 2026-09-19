@@ -2,16 +2,17 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import Frame, InterimTranscriptionFrame, TTSSpeakFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from observability import emit, update_call
 from observability.frames import TTSRequestedFrame
 from storage import CallRepository, Database
 from stt import (
@@ -23,16 +24,30 @@ from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
 from .reply import AgentReply
+from .stage_runtime import CallGraph
 
 logger = logging.getLogger(__name__)
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 USER_TURN_STOP_TIMEOUT_SECONDS = 6
-EMPTY_TURN_RECOVERY_MESSAGE = "Sorry, I lost the last part. Could you repeat it?"
+EMPTY_TURN_RECOVERY_MESSAGE = "Sorry, I didn't catch that. Could you repeat it?"
 
 
 async def log_completed_turn(meta: CallMeta, content: str) -> None:
     logger.info("completed user turn | call_id=%s text=%s", meta.call_id, content)
+
+
+class TranscriptObserver(FrameProcessor):
+    def __init__(self, meta: CallMeta):
+        super().__init__()
+        self._meta = meta
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, InterimTranscriptionFrame):
+            emit(self._meta.call_id, "stt_partial", {"text": frame.text})
+            update_call(self._meta.call_id, state="listening")
+        await self.push_frame(frame, direction)
 
 
 def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
@@ -52,6 +67,8 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
             "user turn stopped | call_id=%s content=%r", meta.call_id, message.content
         )
         if message.content:
+            emit(meta.call_id, "stt_final", {"text": message.content})
+            update_call(meta.call_id, state="thinking")
             await on_completed_turn(meta, message.content)
             return
         logger.warning("empty user turn | call_id=%s", meta.call_id)
@@ -74,12 +91,15 @@ def create_transcription_agent(
         await database.init()
         repository = CallRepository(database)
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
+        state = CallGraph.start()
+        emit(meta.call_id, "stage_entered", {"turn": 0, "step": 0, "stage": state.stage_id, "from": None, "cleared": []})
         processors = [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
+            TranscriptObserver(meta),
             create_user_aggregator(meta, on_completed_turn),
-            AgentReply(meta.call_id, repository),
+            AgentReply(meta.call_id, repository, state),
             create_tts(),
         ]
         logger.info(

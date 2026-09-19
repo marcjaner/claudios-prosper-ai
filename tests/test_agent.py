@@ -16,23 +16,20 @@ from storage import CallRepository
 
 
 class FakeRepository:
-    def __init__(self):
-        self.workflow = {"stage": "identify"}
-
     async def append_event(self, *_args):
         return None
 
     async def memory_for_call(self, _call_id):
         return ""
 
-    async def record_submission(self, *_args):
+    async def workflow_for_call(self, _call_id):
+        return {}
+
+    async def save_workflow(self, _call_id, _state):
         return None
 
-    async def workflow_for_call(self, _call_id):
-        return self.workflow
-
-    async def save_workflow(self, _call_id, state):
-        self.workflow = state
+    async def record_submission(self, *_args):
+        return None
 
 
 class FakeClinicApi:

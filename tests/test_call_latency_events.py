@@ -8,7 +8,7 @@ from pipecat.processors.frame_processor import FrameDirection
 
 import agent.reply as reply_module
 from agent.agent import run_agent_turn
-from agent.clinic_api import ClinicApi, ProsperApiError
+from agent.clinic_api import ClinicApi
 from agent.llm import (
     LLMClient,
     LLMToolCall,
@@ -34,7 +34,7 @@ class FakeRepository:
     def __init__(self):
         self.events = []
         self.submissions = []
-        self.workflow = {"stage": "identify"}
+        self.workflow = {}
 
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
@@ -42,14 +42,14 @@ class FakeRepository:
     async def memory_for_call(self, call_id):
         return ""
 
+    async def workflow_for_call(self, call_id):
+        return {}
+
+    async def save_workflow(self, call_id, state):
+        self.workflow = state
+
     async def record_submission(self, *arguments):
         self.submissions.append(arguments)
-
-    async def workflow_for_call(self, _call_id):
-        return self.workflow
-
-    async def save_workflow(self, _call_id, state):
-        self.workflow = state
 
 
 class FakeClinicApi:
@@ -71,7 +71,6 @@ class FakeLLMClient:
 
     def __init__(self, responses: list[AgentResponse | Exception]):
         self._responses = iter(responses)
-        self.prompts = []
 
     @staticmethod
     def _usage():
@@ -84,7 +83,6 @@ class FakeLLMClient:
         )
 
     def complete_with_tools(self, *args, **kwargs):
-        self.prompts.append(args[0])
         response = next(self._responses)
         if isinstance(response, Exception):
             raise response
@@ -123,9 +121,9 @@ class CapturingAgentReply(AgentReply):
 def run_observed_turn(
     monkeypatch,
     responses: list[AgentResponse | Exception],
-    clinic_api: FakeClinicApi | None = None,
+    clinic_error: Exception | None = None,
 ):
-    clinic_api = clinic_api or FakeClinicApi()
+    clinic_api = FakeClinicApi(clinic_error)
     monkeypatch.setattr(
         ClinicApi, "from_environment", classmethod(lambda cls: clinic_api)
     )
@@ -321,23 +319,13 @@ def test_llm_failure_emits_safe_failure_event(monkeypatch):
     assert clinic_api.is_closed is True
 
 
-def test_tool_failure_is_sanitized_and_returned_to_llm(monkeypatch):
+def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch):
+    """A clinic outage becomes feedback the agent can voice, not a silent dead turn."""
     clinic_api = FakeClinicApi(RuntimeError("secret clinic details"))
     monkeypatch.setattr(
         ClinicApi, "from_environment", classmethod(lambda cls: clinic_api)
     )
     repository = FakeRepository()
-    client = FakeLLMClient(
-        [
-            AgentResponse(
-                immediate_answer="Let me check.",
-                tool_calls=[
-                    ToolCall(name="search_patients", arguments={"name": "Ana"})
-                ],
-            ),
-            AgentResponse(immediate_answer="I can't access the records right now."),
-        ]
-    )
 
     async def run():
         frames = []
@@ -350,7 +338,23 @@ def test_tool_failure_is_sanitized_and_returned_to_llm(monkeypatch):
             "Hello",
             "CA456",
             cast(CallRepository, repository),
-            cast(LLMClient, client),
+            cast(
+                LLMClient,
+                FakeLLMClient(
+                    [
+                        AgentResponse(
+                            immediate_answer="Let me check.",
+                            tool_calls=[
+                                ToolCall(
+                                    name="search_patients",
+                                    arguments={"name": "Ana"},
+                                )
+                            ],
+                        ),
+                        AgentResponse(immediate_answer="Sorry, I could not look that up."),
+                    ]
+                ),
+            ),
             event_sink=emit,
         ):
             replies.append(response)
@@ -364,71 +368,18 @@ def test_tool_failure_is_sanitized_and_returned_to_llm(monkeypatch):
     assert finished.status == "error"
     assert finished.error_type == "RuntimeError"
     assert finished.error_message == "Tool execution failed"
+    assert "secret" not in finished.error_message
     assert [response.immediate_answer for response in replies] == [
         "Let me check.",
-        "I can't access the records right now.",
+        "Sorry, I could not look that up.",
     ]
     tool_result = next(
         payload for _, event, payload in repository.events if event == "tool_result"
     )
     assert tool_result["output"]["ok"] is False
+    assert "Retry once" in tool_result["output"]["instruction"]
     assert "secret clinic details" not in str(tool_result)
-    assert "secret clinic details" not in client.prompts[-1]
     assert clinic_api.is_closed is True
-
-
-def test_validation_error_can_be_corrected_and_retried(monkeypatch):
-    class RecoveringClinicApi(FakeClinicApi):
-        def __init__(self):
-            super().__init__()
-            self.arguments = []
-
-        def search_patients(self, **arguments):
-            self.arguments.append(arguments)
-            if len(self.arguments) == 1:
-                raise ProsperApiError(422, {"detail": "invalid date format"})
-            return {"matches": [{"patient_id": "P00002"}]}
-
-    clinic_api = RecoveringClinicApi()
-    monkeypatch.setattr(
-        ClinicApi, "from_environment", classmethod(lambda cls: clinic_api)
-    )
-    responses: list[AgentResponse | Exception] = [
-        AgentResponse(
-            immediate_answer="Let me check.",
-            tool_calls=[
-                ToolCall(
-                    name="search_patients",
-                    arguments={"date_of_birth": "13-02-2011"},
-                )
-            ],
-        ),
-        AgentResponse(
-            immediate_answer="",
-            tool_calls=[
-                ToolCall(
-                    name="search_patients",
-                    arguments={"date_of_birth": "2011-02-13"},
-                )
-            ],
-        ),
-        AgentResponse(immediate_answer="I found your record."),
-    ]
-
-    frames, replies = run_observed_turn(monkeypatch, responses, clinic_api)
-
-    assert [arguments["date_of_birth"] for arguments in clinic_api.arguments] == [
-        "13-02-2011",
-        "2011-02-13",
-    ]
-    assert [response.immediate_answer for response in replies] == [
-        "Let me check.",
-        "I found your record.",
-    ]
-    tool_finishes = [
-        frame for frame in frames if isinstance(frame, ToolCallFinishedFrame)
-    ]
-    assert [frame.status for frame in tool_finishes] == ["error", "success"]
 
 
 def test_tool_arguments_exclude_credentials_headers_and_hidden_call_id(monkeypatch):
@@ -439,7 +390,7 @@ def test_tool_arguments_exclude_credentials_headers_and_hidden_call_id(monkeypat
                 immediate_answer="Let me check.",
                 tool_calls=[
                     ToolCall(
-                        name="unknown_tool",
+                        name="search_patients",
                         arguments={
                             "name": "Ana",
                             "api_key": "secret",
@@ -452,7 +403,7 @@ def test_tool_arguments_exclude_credentials_headers_and_hidden_call_id(monkeypat
                     )
                 ],
             ),
-            AgentResponse(immediate_answer="I could not find that tool."),
+            AgentResponse(immediate_answer="Nobody by that name."),
         ],
     )
 

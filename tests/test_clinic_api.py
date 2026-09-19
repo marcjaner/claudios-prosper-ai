@@ -67,9 +67,7 @@ def test_get_clinic_is_cached_until_refreshed(api: ClinicApi, prosper: FakeProsp
     assert prosper.catalogue_calls == 2
 
 
-def test_read_calls_use_expected_paths_and_query_parameters(
-    api: ClinicApi, prosper: FakeProsper
-):
+def test_read_calls_use_expected_paths_and_query_parameters(api: ClinicApi, prosper: FakeProsper):
     api.search_patients(phone="+34612345678", date_of_birth="1988-03-14")
     api.get_patient_appointments("P00042")
     api.search_availability(
@@ -93,9 +91,7 @@ def test_read_calls_use_expected_paths_and_query_parameters(
     assert dict(availability.url.params)["specialty_id"] == "dermatology"
 
 
-def test_submission_methods_send_exact_route_and_payload(
-    api: ClinicApi, prosper: FakeProsper
-):
+def test_submission_methods_send_exact_route_and_payload(api: ClinicApi, prosper: FakeProsper):
     api.register_patient(
         RegisterPatientRequest(
             call_id="CA-1",
@@ -131,8 +127,12 @@ def test_submission_methods_send_exact_route_and_payload(
         )
     )
     api.cancel(CancelRequest(call_id="CA-1", appointment_id="A000123"))
-    api.no_action(OutcomeRequest(call_id="CA-1", reason=OutcomeReason.NO_AVAILABILITY))
-    api.escalate(OutcomeRequest(call_id="CA-1", reason=OutcomeReason.MEDICAL_EMERGENCY))
+    api.no_action(
+        OutcomeRequest(call_id="CA-1", reason=OutcomeReason.NO_AVAILABILITY)
+    )
+    api.escalate(
+        OutcomeRequest(call_id="CA-1", reason=OutcomeReason.MEDICAL_EMERGENCY)
+    )
 
     assert [request.url.path for request in prosper.requests] == [
         "/api/v1/submit/register",

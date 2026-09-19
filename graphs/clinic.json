@@ -1,0 +1,86 @@
+{
+  "entry": "identificar",
+  "nodes": [
+    {
+      "id": "identificar",
+      "prompt": "Averigua quién llama y encuéntralo en el directorio. Si no está, regístralo. Cuando tengas su ficha, registra patient_id.",
+      "tools": [
+        "search_patients",
+        "register_patient",
+        "get_clinic_catalogue",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "patient_id",
+        "slot",
+        "catalogue_ready"
+      ],
+      "position": {
+        "x": 0,
+        "y": 120
+      }
+    },
+    {
+      "id": "consultar",
+      "prompt": "Ya sabes quién llama. Consulta sus citas o busca huecos reales. Registra catalogue_ready cuando tengas el catálogo, y slot al elegir hora.",
+      "tools": [
+        "get_clinic_catalogue",
+        "get_patient_appointments",
+        "search_availability",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "slot"
+      ],
+      "position": {
+        "x": 330,
+        "y": 120
+      }
+    },
+    {
+      "id": "ejecutar",
+      "prompt": "Confirma la acción con los identificadores que devolvió la clínica. No inventes ninguno.",
+      "tools": [
+        "book_appointment",
+        "reschedule_appointment",
+        "cancel_appointment",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [],
+      "position": {
+        "x": 660,
+        "y": 120
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "identificar",
+      "to": "consultar",
+      "requires": [
+        "patient_id"
+      ]
+    },
+    {
+      "from": "consultar",
+      "to": "ejecutar",
+      "requires": [
+        "patient_id",
+        "catalogue_ready"
+      ]
+    },
+    {
+      "from": "ejecutar",
+      "to": "consultar",
+      "requires": []
+    },
+    {
+      "from": "consultar",
+      "to": "identificar",
+      "requires": []
+    }
+  ]
+}
