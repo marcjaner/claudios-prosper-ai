@@ -106,17 +106,10 @@ function CallCard({ call, now, dense }) {
               }`}
             />
             <span className="text-slate-300">{state}</span>
-            {alert ? (
+            {alert && (
               <span className="inline-flex animate-pulse items-center gap-1 rounded-full border border-rose-500/60 bg-rose-500/20 px-2 py-0.5 font-mono text-xs font-medium text-rose-300">
                 ALERTA · SCORE {Math.round(call.score_overall)}
               </span>
-            ) : (
-              live &&
-              hasScore && (
-                <span className="inline-flex items-center rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs tabular-nums text-slate-300">
-                  Score {Math.round(call.score_overall)}
-                </span>
-              )
             )}
           </p>
         </div>
