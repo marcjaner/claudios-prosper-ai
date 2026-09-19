@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from . import subscribe
+from . import emit, subscribe, update_call
 from .bus import CallUpdate
 
 DASHBOARD_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
@@ -75,13 +75,34 @@ def register_dashboard(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="no such call")
         return {"call": call, "events": store.get_events(call_id)}
 
+    @app.post("/api/calls/{call_id}/stop")
+    async def stop_call(request: Request, call_id: str) -> dict:
+        worker = request.app.state.active_workers.get(call_id)
+        if worker is None:
+            raise HTTPException(status_code=409, detail="call is no longer active")
+        emit(call_id, "operator_stop", {})
+        update_call(call_id, state="stopping")
+        await worker.cancel(reason="stopped by operator")
+        return {"status": "stopping", "call_id": call_id}
+
     @app.websocket("/api/live")
     async def live(websocket: WebSocket) -> None:
         await websocket.accept()
         # The snapshot is what lets a browser refresh mid-call without losing
         # anything; everything after it is a patch.
+        calls = websocket.app.state.store.list_calls()
         await websocket.send_json(
-            {"type": "snapshot", "calls": websocket.app.state.store.list_calls()}
+            {
+                "type": "snapshot",
+                "calls": calls,
+                "events": {
+                    call["call_id"]: websocket.app.state.store.get_events(
+                        call["call_id"]
+                    )
+                    for call in calls
+                    if call["ended_at"] is None
+                },
+            }
         )
         try:
             with subscribe() as queue:

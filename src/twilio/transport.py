@@ -118,6 +118,7 @@ async def run_call(
     build_agent: AgentFactory,
     *,
     initial_greeting: str | None = None,
+    active_workers: dict[str, PipelineWorker] | None = None,
 ) -> None:
     await websocket.accept()
 
@@ -135,6 +136,7 @@ async def run_call(
     )
     metrics = CallMetrics(call_id=meta.call_id, started_at=time.monotonic())
     artifacts = None
+    worker = None
     outcome = "completed"
     failure: str | None = None
     # connected_at is wall clock; CallMetrics.started_at is monotonic and means
@@ -173,6 +175,8 @@ async def run_call(
         )
         if artifacts:
             artifacts.attach_turn_tracker(worker.turn_tracking_observer)
+        if active_workers is not None:
+            active_workers[meta.call_id] = worker
 
         # Nothing tears the pipeline down when the caller hangs up. Without
         # this the worker lives until the idle timeout, holding a socket and a
@@ -194,6 +198,8 @@ async def run_call(
         failure = str(error)
         logger.exception("call failed | call_id={}", meta.call_id)
     finally:
+        if active_workers is not None and active_workers.get(meta.call_id) is worker:
+            active_workers.pop(meta.call_id, None)
         if artifacts:
             artifacts.finish(outcome, metrics.summary())
         metrics.log()
