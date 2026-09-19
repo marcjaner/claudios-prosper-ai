@@ -462,7 +462,7 @@ PAGE = r"""<!doctype html>
     const basePath = location.pathname.replace(/\/$/, '');
 
     function isAgentRun(call) {
-      return call.sources?.includes('agent.db') || call.sources?.includes('recording');
+      return call.sources?.includes('agent.db');
     }
 
     function duration(call) {
