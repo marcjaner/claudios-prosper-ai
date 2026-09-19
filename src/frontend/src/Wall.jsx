@@ -1,19 +1,18 @@
 import { useEffect, useState } from "react";
 
+import WallOverview from "./WallOverview.jsx";
+
 // Every call is cut off at three minutes, so duration is a countdown.
 const CALL_LIMIT_SECONDS = 180;
 const WARN_SECONDS = 150;
 const CRITICAL_SECONDS = 170;
-// An ended call stays on the wall briefly so you can read how it finished.
-const LINGER_SECONDS = 10;
-
 const STATE_LABELS = {
-  connected: "conectando",
-  speaking: "hablando",
-  listening: "escuchando",
-  thinking: "pensando",
-  ended: "terminada",
-  lost: "perdida",
+  connected: "connecting",
+  speaking: "speaking",
+  listening: "listening",
+  thinking: "thinking",
+  ended: "completed",
+  lost: "disconnected",
 };
 
 function useNow(intervalMs = 250) {
@@ -31,9 +30,9 @@ function formatDuration(seconds) {
 }
 
 function ringColor(seconds) {
-  if (seconds >= CRITICAL_SECONDS) return "text-rose-400";
-  if (seconds >= WARN_SECONDS) return "text-amber-400";
-  return "text-emerald-400";
+  if (seconds >= CRITICAL_SECONDS) return "text-rose-500";
+  if (seconds >= WARN_SECONDS) return "text-amber-500";
+  return "text-emerald-500";
 }
 
 function DurationRing({ seconds, live }) {
@@ -43,7 +42,7 @@ function DurationRing({ seconds, live }) {
   return (
     <div className="relative h-16 w-16 shrink-0">
       <svg className="h-full w-full -rotate-90" viewBox="0 0 64 64">
-        <circle cx="32" cy="32" r={radius} fill="none" strokeWidth="5" className="stroke-white/10" />
+        <circle cx="32" cy="32" r={radius} fill="none" strokeWidth="5" className="stroke-slate-100" />
         <circle
           cx="32"
           cy="32"
@@ -53,10 +52,10 @@ function DurationRing({ seconds, live }) {
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={circumference * (1 - progress)}
-          className={`${live ? ringColor(seconds) : "text-slate-600"} stroke-current transition-[stroke-dashoffset] duration-300`}
+          className={`${live ? ringColor(seconds) : "text-slate-300"} stroke-current transition-[stroke-dashoffset] duration-300`}
         />
       </svg>
-      <div className="absolute inset-0 grid place-items-center font-mono text-sm tabular-nums">
+      <div className="absolute inset-0 grid place-items-center text-sm font-semibold tabular-nums text-slate-800">
         {formatDuration(seconds)}
       </div>
     </div>
@@ -84,20 +83,20 @@ function CallCard({ call, now, dense }) {
   return (
     <a
       href={`#/call/${call.call_id}`}
-      className={`block rounded-xl border p-4 transition-colors hover:border-slate-600 ${
+      className={`block rounded-[20px] border p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-[border-color,box-shadow] hover:border-slate-300 hover:shadow-md ${
         alert
-          ? "border-rose-500 bg-rose-950/40 ring-1 ring-rose-500/50"
-          : `bg-slate-900/70 ${live ? "border-slate-700" : "border-slate-800 opacity-60"}`
+          ? "border-rose-300 bg-rose-50 ring-1 ring-rose-200"
+          : `bg-white ${live ? "border-slate-200" : "border-slate-200 opacity-70"}`
       }`}
     >
       <div className="flex items-start gap-4">
         <DurationRing seconds={seconds} live={live} />
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium text-slate-100">
-            {call.patient_id ?? "sin identificar"}
+          <p className="truncate font-semibold text-slate-900">
+            {call.patient_id ?? "unidentified caller"}
           </p>
-          <p className="truncate font-mono text-xs text-slate-500">
-            {call.from_number ?? "número oculto"}
+          <p className="truncate text-xs text-slate-400">
+            {call.from_number ?? "hidden number"}
           </p>
           <p className="mt-2 flex flex-wrap items-center gap-2 text-sm">
             <span
@@ -105,15 +104,15 @@ function CallCard({ call, now, dense }) {
                 live ? "animate-pulse bg-emerald-400" : "bg-slate-600"
               }`}
             />
-            <span className="text-slate-300">{state}</span>
+            <span className="text-slate-600">{state}</span>
             {alert ? (
-              <span className="inline-flex animate-pulse items-center gap-1 rounded-full border border-rose-500/60 bg-rose-500/20 px-2 py-0.5 font-mono text-xs font-medium text-rose-300">
-                ALERTA · SCORE {Math.round(call.score_overall)}
+              <span className="inline-flex animate-pulse items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700">
+                Review · score {Math.round(call.score_overall)}
               </span>
             ) : (
               live &&
               hasScore && (
-                <span className="inline-flex items-center rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs tabular-nums text-slate-300">
+                <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold tabular-nums text-slate-600">
                   Score {Math.round(call.score_overall)}
                 </span>
               )
@@ -122,17 +121,17 @@ function CallCard({ call, now, dense }) {
         </div>
       </div>
       {!dense && (
-        <dl className="mt-3 flex gap-4 border-t border-slate-800 pt-3 text-xs text-slate-500">
+        <dl className="mt-4 flex gap-4 border-t border-slate-100 pt-4 text-xs text-slate-400">
           <div>
-            <dt className="uppercase tracking-wide">primera voz</dt>
-            <dd className="font-mono text-slate-300">
+            <dt>First response</dt>
+            <dd className="mt-1 font-semibold tabular-nums text-slate-700">
               {call.ttfa_seconds == null ? "—" : `${call.ttfa_seconds.toFixed(2)}s`}
             </dd>
           </div>
           {call.error && (
             <div className="min-w-0">
-              <dt className="uppercase tracking-wide text-rose-400">error</dt>
-              <dd className="truncate text-rose-300">{call.error}</dd>
+              <dt className="text-rose-500">Error</dt>
+              <dd className="truncate text-rose-700">{call.error}</dd>
             </div>
           )}
         </dl>
@@ -143,31 +142,68 @@ function CallCard({ call, now, dense }) {
 
 export default function Wall({ calls }) {
   const now = useNow();
+  const [showCompleted, setShowCompleted] = useState(false);
 
-  const onWall = [...calls.values()]
-    .filter((call) => !call.ended_at || now - call.ended_at < LINGER_SECONDS)
-    .sort((a, b) => b.started_at - a.started_at);
-  const dense = onWall.length > 6;
+  const todayStart = new Date(now * 1000);
+  todayStart.setHours(0, 0, 0, 0);
+  const visibleCalls = [...calls.values()]
+    .filter((call) => !call.ended_at || (showCompleted && call.ended_at >= todayStart.getTime() / 1000))
+    .sort((a, b) => {
+      if (Boolean(a.ended_at) !== Boolean(b.ended_at)) return a.ended_at ? 1 : -1;
+      return b.started_at - a.started_at;
+    });
+  const activeCount = visibleCalls.filter((call) => !call.ended_at).length;
+  const dense = visibleCalls.length > 6;
 
   return (
-    <main className="p-6">
-      {onWall.length === 0 ? (
-        <p className="py-24 text-center text-slate-600">
-          Sin llamadas. El wall se llena solo cuando entre la primera.
-        </p>
-      ) : (
-        <div
-          className={`grid gap-4 ${
-            dense
-              ? "grid-cols-[repeat(auto-fill,minmax(230px,1fr))]"
-              : "grid-cols-[repeat(auto-fill,minmax(320px,1fr))]"
-          }`}
-        >
-          {onWall.map((call) => (
-            <CallCard key={call.call_id} call={call} now={now} dense={dense} />
-          ))}
+    <main className="mx-auto max-w-[1500px] space-y-10 px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
+      <WallOverview calls={calls} now={now} />
+
+      <section aria-labelledby="active-calls-title">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+          <h2 id="active-calls-title" className="text-xl font-semibold tracking-tight text-slate-950">
+            {showCompleted ? "Today's calls" : "Active calls"}
+          </h2>
+          <div className="flex items-center gap-3">
+            <p className="text-sm font-medium text-slate-400">
+              {activeCount ? `${activeCount} active` : "None active"}
+            </p>
+            <button
+              type="button"
+              aria-pressed={showCompleted}
+              onClick={() => setShowCompleted((current) => !current)}
+              className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 ${
+                showCompleted
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+              }`}
+            >
+              Show completed
+              <span className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${showCompleted ? "bg-emerald-500" : "bg-slate-200"}`}>
+                <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${showCompleted ? "translate-x-4" : "translate-x-0"}`} />
+              </span>
+            </button>
+          </div>
         </div>
-      )}
+
+        {visibleCalls.length === 0 ? (
+          <div className="rounded-[22px] border border-dashed border-slate-300 bg-white/55 py-14 text-center">
+            <p className="text-slate-400">The next call will appear here when it arrives.</p>
+          </div>
+        ) : (
+          <div
+            className={`grid gap-4 ${
+              dense
+                ? "grid-cols-[repeat(auto-fill,minmax(230px,1fr))]"
+                : "grid-cols-[repeat(auto-fill,minmax(320px,1fr))]"
+            }`}
+          >
+            {visibleCalls.map((call) => (
+              <CallCard key={call.call_id} call={call} now={now} dense={dense} />
+            ))}
+          </div>
+        )}
+      </section>
     </main>
   );
 }
