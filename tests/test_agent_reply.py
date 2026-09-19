@@ -8,8 +8,9 @@ from pipecat.processors.frame_processor import FrameDirection
 
 import agent.reply
 import observability
+from agent.language import DEFAULT_LANGUAGE, phrases
 from agent.models import AgentResponse
-from agent.reply import AGENT_ERROR_REPLY, AgentReply
+from agent.reply import AgentReply
 from observability.frames import TTSRequestedFrame
 
 
@@ -121,10 +122,10 @@ def test_agent_reply_falls_back_without_ending_the_call(monkeypatch, bus):
 
     requested = [f for f in processor.emitted if isinstance(f, TTSRequestedFrame)]
     spoken = [f for f in processor.emitted if isinstance(f, TTSSpeakFrame)]
-    assert [f.text for f in requested] == [AGENT_ERROR_REPLY]
-    assert [f.text for f in spoken] == [AGENT_ERROR_REPLY]
+    assert [f.text for f in requested] == [phrases(DEFAULT_LANGUAGE).error]
+    assert [f.text for f in spoken] == [phrases(DEFAULT_LANGUAGE).error]
     assert ("CA456", "error", {"message": "LLM exploded"}) in bus.events
-    assert ("CA456", "tts", {"text": AGENT_ERROR_REPLY}) in bus.events
+    assert ("CA456", "tts", {"text": phrases(DEFAULT_LANGUAGE).error}) in bus.events
 
 
 def test_speculative_context_is_forwarded_without_running(monkeypatch, bus):

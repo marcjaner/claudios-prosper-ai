@@ -431,7 +431,7 @@ def test_a_failed_call_is_not_remembered_as_already_answered():
 
 
 def test_a_blank_final_answer_still_says_something():
-    from agent.agent import NO_ANSWER_FALLBACK
+    from agent.language import DEFAULT_LANGUAGE, phrases
 
     state = two_stage_state()
     client = FakeClient(
@@ -443,4 +443,4 @@ def test_a_blank_final_answer_still_says_something():
     spoken = run_turn("Soy Ana", state, client, FakeRepository(),
                       {"search_patients": {"patients": [{"id": "P1"}]}})
 
-    assert spoken[-1] == NO_ANSWER_FALLBACK
+    assert spoken[-1] == phrases(DEFAULT_LANGUAGE).no_answer
