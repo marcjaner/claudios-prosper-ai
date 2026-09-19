@@ -3,10 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { getActionLabel } from "./agentGraph.js";
 
 const SPEAKERS = {
-  tts: { who: "Agente", tone: "text-emerald-300" },
-  llm: { who: "Razonamiento", tone: "text-slate-400" },
-  stt_final: { who: "Paciente", tone: "text-slate-300" },
-  stt_partial: { who: "Paciente", tone: "text-slate-400" },
+  tts: { who: "Assistant", tone: "text-emerald-700" },
+  llm: { who: "Reasoning", tone: "text-slate-500" },
+  stt_final: { who: "Patient", tone: "text-slate-600" },
+  stt_partial: { who: "Patient", tone: "text-slate-400" },
 };
 
 /** A request and its response are one thing that happened, so show one chip. */
@@ -56,25 +56,25 @@ function ToolChip({ event, live }) {
   const milliseconds =
     response.ms ?? (event.result ? Math.round((event.result.ts - event.ts) * 1000) : null);
   return (
-    <div className={`rounded-lg border px-3 py-2.5 ${failed ? "border-rose-900/60 bg-rose-500/5" : "border-slate-800/80 bg-slate-950/40"}`}>
+    <div className={`rounded-xl border px-3 py-2.5 ${failed ? "border-rose-200 bg-rose-50" : "border-slate-200 bg-slate-50/70"}`}>
       <button
         type="button"
         onClick={() => setOpen((previous) => !previous)}
         aria-expanded={open}
-        className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
+        className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500"
       >
         <span aria-hidden="true" className="text-slate-400">{open ? "▾" : "▸"}</span>
-        <span className="min-w-0 break-words text-xs font-medium text-slate-300">
-          {payload.name ? getActionLabel(payload.name) : event.kind === "submit" ? "Registro de la gestión" : event.kind === "error" ? "Incidencia durante la llamada" : "Actividad del asistente"}
+        <span className="min-w-0 break-words text-xs font-semibold text-slate-700">
+          {payload.name ? getActionLabel(payload.name) : event.kind === "submit" ? "Submitted record" : event.kind === "error" ? "Call issue" : "Assistant activity"}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[11px]">
-          {pending && <span className="text-amber-300">{live ? "en curso" : "sin resultado"}</span>}
-          {status && <span className={failed ? "text-rose-300" : "text-emerald-300/80"}>{status}</span>}
-          {milliseconds != null && <span className="text-slate-400">{milliseconds} ms</span>}
+          {pending && <span className="text-amber-700">{live ? "in progress" : "no result"}</span>}
+          {status && <span className={failed ? "text-rose-700" : "text-emerald-700"}>{status}</span>}
+          {milliseconds != null && <span className="text-slate-500">{milliseconds} ms</span>}
         </span>
       </button>
       {open && (
-        <pre className="mt-3 overflow-x-auto border-t border-slate-800 pt-3 font-mono text-xs leading-relaxed text-slate-300">
+        <pre className="mt-3 overflow-x-auto border-t border-slate-200 pt-3 font-mono text-xs leading-relaxed text-slate-600">
           {payload.name ?? payload.route ?? event.kind}
           {payload.url ? `\n${payload.url}` : ""}
           {"\n"}
@@ -104,13 +104,13 @@ export default function Transcript({ events: incoming, startedAt, live }) {
   if (events.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-        <p className="text-sm font-medium text-slate-300">
-          {live ? "Esperando conversación" : "Sin conversación registrada"}
+        <p className="text-sm font-medium text-slate-700">
+          {live ? "Waiting for conversation" : "No conversation recorded"}
         </p>
         <p className="mt-2 max-w-xs text-sm leading-relaxed text-slate-400">
           {live
-            ? "La transcripción aparecerá aquí cuando empiece la conversación."
-            : "Esta llamada no tiene una transcripción disponible."}
+            ? "The transcript will appear when the conversation begins."
+            : "This call does not have a transcript available."}
         </p>
       </div>
     );
@@ -129,14 +129,14 @@ export default function Transcript({ events: incoming, startedAt, live }) {
         const speaker = SPEAKERS[event.kind];
         return (
           <div key={event.id ?? `${event.ts}-${index}`} className="flex gap-2.5 text-sm">
-            <span className="w-9 shrink-0 pt-3 font-mono text-[11px] tabular-nums text-slate-500">
+            <span className="w-9 shrink-0 pt-3 text-[11px] tabular-nums text-slate-400">
               {offset(event, startedAt)}
             </span>
             <div className="min-w-0 flex-1">
               {speaker ? (
-                <div className={`rounded-xl px-3.5 py-3 ${event.kind === "tts" ? "bg-emerald-400/[0.06]" : "bg-slate-800/45"}`}>
+                <div className={`rounded-xl px-3.5 py-3 ${event.kind === "tts" ? "bg-emerald-50" : "bg-slate-50"}`}>
                   <p className={`mb-1 text-xs font-medium ${speaker.tone}`}>{speaker.who}</p>
-                  <p className={`break-words leading-relaxed ${event.kind === "stt_partial" ? "text-slate-400 italic" : "text-slate-200"}`}>
+                  <p className={`break-words leading-relaxed ${event.kind === "stt_partial" ? "text-slate-400 italic" : "text-slate-700"}`}>
                     {event.payload.text}
                   </p>
                 </div>
@@ -151,9 +151,9 @@ export default function Transcript({ events: incoming, startedAt, live }) {
         <button
           type="button"
           onClick={() => setPinned(true)}
-          className="sticky bottom-2 mx-auto block rounded-lg border border-emerald-800 bg-emerald-950 px-3 py-2 text-xs font-medium text-emerald-200 focus-visible:outline-2 focus-visible:outline-emerald-300"
+          className="sticky bottom-2 mx-auto block rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 focus-visible:outline-2 focus-visible:outline-emerald-500"
         >
-          Volver al directo
+          Return to live
         </button>
       )}
     </div>

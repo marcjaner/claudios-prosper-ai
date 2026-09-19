@@ -13,7 +13,7 @@ function bucketFormat(bucketSeconds) {
     bucketSeconds >= 24 * 3600
       ? { day: "2-digit", month: "short" }
       : { hour: "2-digit", minute: "2-digit" };
-  return new Intl.DateTimeFormat("es-ES", { ...options, timeZone: "Europe/Madrid" });
+  return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "Europe/Madrid" });
 }
 
 export default function OutcomeHistogram({ histogram }) {
@@ -34,21 +34,21 @@ export default function OutcomeHistogram({ histogram }) {
   const active = hovered == null ? null : buckets[hovered];
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+    <div className="clinic-panel p-6">
       <div className="flex flex-wrap items-baseline gap-x-4">
-        <p className="text-xs uppercase tracking-wide text-slate-500">
-          Llamadas en el tiempo
+        <p className="font-semibold text-slate-900">
+          Calls over time
         </p>
-        <p className="font-mono text-xs text-slate-600">
+        <p className="text-xs text-slate-400">
           {active
             ? `${format.format(new Date(active.bucket * 1000))} · ${
                 ORDER.reduce((sum, key) => sum + active[key], 0)
-              } llamadas`
-            : `barras de ${
+              } calls`
+            : `${
                 histogram.bucket_seconds >= 3600
-                  ? `${histogram.bucket_seconds / 3600} h`
-                  : `${histogram.bucket_seconds / 60} min`
-              }`}
+                  ? `${histogram.bucket_seconds / 3600}-hour`
+                  : `${histogram.bucket_seconds / 60}-minute`
+              } intervals`}
         </p>
       </div>
 
@@ -92,16 +92,15 @@ export default function OutcomeHistogram({ histogram }) {
               style={{ backgroundColor: GROUPS[key].color }}
               className="h-2 w-2 rounded-full"
             />
-            <span className="text-slate-400">{GROUPS[key].label}</span>
-            <span className="font-mono tabular-nums text-slate-200">
+            <span className="text-slate-500">{GROUPS[key].label}</span>
+            <span className="font-semibold tabular-nums text-slate-800">
               {active ? active[key] : totals[key]}
             </span>
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-xs text-slate-600">
-        Una negativa razonada puntúa como una reserva; solo una llamada sin
-        registro falla siempre.
+      <p className="mt-2 text-xs text-slate-400">
+        A reasoned refusal scores like a booking; only a call without a record always fails.
       </p>
     </div>
   );
