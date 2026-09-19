@@ -19,6 +19,10 @@ class ClinicTools:
     def search_patients(self, name: str | None = None, national_id: str | None = None, phone: str | None = None, date_of_birth: str | None = None) -> dict[str, Any]:
         return self._api.search_patients(name=name, national_id=national_id, phone=phone, date_of_birth=date_of_birth)
 
+    def get_clinic_catalogue(self) -> dict[str, Any]:
+        """Return specialties, providers, locations, appointment types, and policies with their IDs."""
+        return self._api.get_clinic()
+
     def get_patient_appointments(self, patient_id: str, when: str = "upcoming") -> dict[str, Any]:
         return self._api.get_patient_appointments(patient_id, when=when)
 
@@ -47,7 +51,7 @@ class ClinicTools:
 def create_clinic_tools(api: ClinicApi, call_id: str) -> list[Callable[..., Any]]:
     tools = ClinicTools(api, call_id)
     return [getattr(tools, name) for name in (
-        "search_patients", "get_patient_appointments", "search_availability",
+        "get_clinic_catalogue", "search_patients", "get_patient_appointments", "search_availability",
         "register_patient", "book_appointment", "reschedule_appointment",
         "cancel_appointment", "submit_no_action", "escalate_to_human",
     )]
