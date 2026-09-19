@@ -459,6 +459,7 @@ PAGE = r"""<!doctype html>
     let selected = decodeURIComponent(location.hash.replace(/^#\/call\//, '')) || null;
     let detailSignature = '';
     let timelineFilter = '';
+    const refreshIntervalMs = 5000;
     const basePath = location.pathname.replace(/\/$/, '');
 
     function isAgentRun(call) {
@@ -618,6 +619,13 @@ PAGE = r"""<!doctype html>
       } catch (_) { $('#main').innerHTML = '<div class="empty">Call could not be loaded.</div>'; }
     }
 
+    async function refresh() {
+      if (document.hidden) return;
+      await refreshCalls();
+      const selectedCall = calls.find((call) => call.call_id === selected);
+      if (selectedCall && !selectedCall.ended_at) await refreshDetail();
+    }
+
     $('#search').oninput = renderCalls;
     document.querySelectorAll('[data-filter]').forEach((button) => button.onclick = () => {
       callFilter = button.dataset.filter;
@@ -626,8 +634,8 @@ PAGE = r"""<!doctype html>
     });
     window.addEventListener('hashchange', () => { selected = decodeURIComponent(location.hash.replace(/^#\/call\//,'')) || null; renderCalls(); refreshDetail(); });
     refreshCalls().then(() => { if (selected) refreshDetail(); });
-    setInterval(refreshCalls, 1000);
-    setInterval(refreshDetail, 1000);
+    setInterval(refresh, refreshIntervalMs);
+    document.addEventListener('visibilitychange', refresh);
   </script>
 </body>
 </html>"""
