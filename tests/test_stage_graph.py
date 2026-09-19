@@ -1,0 +1,272 @@
+import asyncio
+
+import pytest
+
+from agent.agent import run_agent_turn
+from agent.graph import InvalidGraph, parse_graph
+from agent.llm import LLMToolCall, ToolCompletion, Usage
+from agent.stage_runtime import CallGraph
+
+IDENTIFY = {
+    "id": "identify",
+    "prompt": "Find out who is calling.",
+    "tools": ["search_patients"],
+}
+BOOK = {
+    "id": "book",
+    "prompt": "Book the appointment.",
+    "tools": ["book_appointment", "search_availability"],
+    "clears": ["slot"],
+}
+TWO_STAGE = {
+    "entry": "identify",
+    "nodes": [IDENTIFY, BOOK],
+    "edges": [{"from": "identify", "to": "book", "requires": ["patient_id"]}],
+}
+
+
+def two_stage_state() -> CallGraph:
+    return CallGraph.start(parse_graph(TWO_STAGE))
+
+
+class FakeClient:
+    """Replays a scripted sequence of model responses, one per completion."""
+
+    default_model = "fake"
+
+    def __init__(self, *completions):
+        self.completions = list(completions)
+        self.offered: list[list[str]] = []
+        self.prompts: list[str] = []
+
+    def complete_with_tools(self, prompt, tool_definitions, **_):
+        self.prompts.append(prompt)
+        self.offered.append([tool["function"]["name"] for tool in tool_definitions])
+        return self.completions.pop(0)
+
+    def complete(self, prompt, **_):
+        self.prompts.append(prompt)
+        from agent.llm import Completion
+
+        return Completion(text="All set.", sources=[], usage=Usage())
+
+
+def says(text, *calls):
+    return ToolCompletion(
+        text=text,
+        tool_calls=[LLMToolCall(call_id=f"c{i}", name=n, arguments=a) for i, (n, a) in enumerate(calls)],
+        usage=Usage(),
+    )
+
+
+class FakeRepository:
+    def __init__(self):
+        self.events: list[tuple[str, dict]] = []
+        self.submissions: list[str] = []
+
+    async def append_event(self, _call_id, event_type, payload):
+        self.events.append((event_type, payload))
+
+    async def record_submission(self, _call_id, action, *_args):
+        self.submissions.append(action)
+
+
+def run_turn(prompt, state, client, repository, tool_outputs=None):
+    """Drive one turn with the clinic tools stubbed out."""
+    import agent.agent as module
+
+    outputs = tool_outputs or {}
+    original_api = module.ClinicApi.from_environment
+    original_tools = module.create_clinic_tools
+
+    class StubApi:
+        def close(self):
+            pass
+
+    def stub_tools(_api, _call_id):
+        def make(name):
+            def call(**kwargs):
+                result = outputs.get(name, {"ok": True})
+                if isinstance(result, Exception):
+                    raise result
+                return result
+
+            call.__name__ = name
+            return call
+
+        return [make(name) for name in ("search_patients", "book_appointment", "search_availability")]
+
+    module.ClinicApi.from_environment = staticmethod(lambda: StubApi())
+    module.create_clinic_tools = stub_tools
+    try:
+        async def drive():
+            return [r.immediate_answer async for r in run_agent_turn(
+                prompt, "CA-1", repository, client, state=state
+            )]
+
+        return asyncio.run(drive())
+    finally:
+        module.ClinicApi.from_environment = original_api
+        module.create_clinic_tools = original_tools
+
+
+# --- graph validation -------------------------------------------------------
+
+def test_edge_to_a_missing_stage_is_rejected():
+    with pytest.raises(InvalidGraph):
+        parse_graph({
+            "entry": "identify",
+            "nodes": [IDENTIFY],
+            "edges": [{"from": "identify", "to": "nowhere", "requires": []}],
+        })
+
+
+def test_unknown_tool_name_is_rejected():
+    with pytest.raises(InvalidGraph):
+        parse_graph({
+            "entry": "a",
+            "nodes": [{"id": "a", "tools": ["teleport"]}],
+        })
+
+
+def test_entry_must_exist():
+    with pytest.raises(InvalidGraph):
+        parse_graph({"entry": "missing", "nodes": [IDENTIFY]})
+
+
+def test_duplicate_stage_ids_are_rejected():
+    with pytest.raises(InvalidGraph):
+        parse_graph({"entry": "identify", "nodes": [IDENTIFY, IDENTIFY]})
+
+
+# --- eligibility and facts --------------------------------------------------
+
+def test_transition_is_blocked_until_its_facts_exist():
+    state = two_stage_state()
+    assert state.refuse_reason("go_to", {"stage": "book"})
+    state.facts["patient_id"] = "P1"
+    assert state.refuse_reason("go_to", {"stage": "book"}) == ""
+
+
+def test_entering_a_stage_clears_the_facts_it_resets():
+    state = two_stage_state()
+    state.facts.update({"patient_id": "P1", "slot": "10:00"})
+    assert state.enter("book") == ["slot"]
+    assert state.facts == {"patient_id": "P1"}
+
+
+def test_record_facts_rejects_a_nested_payload():
+    state = two_stage_state()
+    assert state.refuse_reason("record_facts", {"facts": {"a": {"b": 1}}})
+    assert state.refuse_reason("record_facts", {"facts": {"a": "b"}}) == ""
+
+
+def test_prompt_names_the_exact_keys_a_transition_needs():
+    from agent.stage_runtime import render_context
+
+    context = render_context(two_stage_state())
+    assert "patient_id" in context
+    assert "book" in context
+
+
+# --- the turn loop ----------------------------------------------------------
+
+def test_a_forbidden_tool_is_refused_and_the_promise_is_never_spoken():
+    state = two_stage_state()
+    repository = FakeRepository()
+    client = FakeClient(
+        says("I'll book that right now.", ("book_appointment", {"patient_id": "P1"})),
+        says("Who am I speaking with?"),
+    )
+
+    spoken = run_turn("Book me in", state, client, repository)
+
+    assert "book that right now" not in " ".join(spoken)
+    assert spoken == ["Who am I speaking with?"]
+    assert repository.submissions == []
+    assert "book_appointment" not in client.offered[0]
+
+
+def test_one_refused_call_suppresses_the_whole_utterance():
+    state = two_stage_state()
+    client = FakeClient(
+        says(
+            "Noted, booking now.",
+            ("record_facts", {"facts": {"name": "Lucas"}}),
+            ("book_appointment", {"patient_id": "P1"}),
+        ),
+        says("What is your ID?"),
+    )
+
+    spoken = run_turn("hi", state, client, FakeRepository())
+
+    assert "booking now" not in " ".join(spoken)
+    # Only the promise is withheld; the harmless fact write still lands, so the
+    # model does not have to ask for the name again on its next attempt.
+    assert state.facts == {"name": "Lucas"}
+
+
+def test_a_facts_only_step_ends_the_turn_so_the_caller_can_answer():
+    state = two_stage_state()
+    client = FakeClient(
+        says("What day suits you?", ("record_facts", {"facts": {"specialty": "cardio"}})),
+    )
+
+    spoken = run_turn("I need a cardiologist", state, client, FakeRepository())
+
+    assert spoken == ["What day suits you?"]
+    assert state.facts == {"specialty": "cardio"}
+
+
+def test_a_tool_result_continues_the_turn_without_the_caller():
+    state = two_stage_state()
+    client = FakeClient(
+        says("One moment.", ("search_patients", {"name": "Lucas"})),
+        says("", ("record_facts", {"facts": {"patient_id": "P1"}}), ("go_to", {"stage": "book"})),
+        says("You are in the system, when suits you?"),
+    )
+
+    spoken = run_turn("I'm Lucas", state, client, FakeRepository(),
+                      {"search_patients": {"patients": [{"id": "P1"}]}})
+
+    assert state.stage_id == "book"
+    assert state.facts["patient_id"] == "P1"
+    assert spoken == ["One moment.", "You are in the system, when suits you?"]
+
+
+def test_bookkeeping_steps_stay_silent():
+    state = two_stage_state()
+    state.facts["patient_id"] = "P1"
+    client = FakeClient(
+        says("", ("go_to", {"stage": "book"})),
+        says("When would you like to come in?"),
+    )
+
+    spoken = run_turn("book me", state, client, FakeRepository())
+
+    assert spoken == ["When would you like to come in?"]
+
+
+def test_the_budget_always_ends_with_a_spoken_answer():
+    state = two_stage_state()
+    client = FakeClient(*[
+        says(f"step {i}", ("search_patients", {"name": "Lucas"})) for i in range(4)
+    ])
+
+    spoken = run_turn("hello", state, client, FakeRepository())
+
+    assert spoken[-1] == "All set."
+    assert len(client.offered) == 4
+
+
+def test_a_failing_tool_becomes_feedback_not_a_dead_turn():
+    state = two_stage_state()
+    client = FakeClient(
+        says("Checking.", ("search_patients", {"name": "Lucas"})),
+        says("Sorry, I could not look that up."),
+    )
+
+    spoken = run_turn("I'm Lucas", state, client, FakeRepository(),
+                      {"search_patients": RuntimeError("upstream down")})
+
+    assert spoken == ["Checking.", "Sorry, I could not look that up."]

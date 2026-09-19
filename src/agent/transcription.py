@@ -10,6 +10,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from observability import emit
 from storage import CallRepository, Database
 from stt import (
     DeepgramEndpointingStopStrategy,
@@ -20,6 +21,7 @@ from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
 from .reply import AgentReply
+from .stage_runtime import CallGraph
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +64,14 @@ def create_transcription_agent(
         await database.init()
         repository = CallRepository(database)
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
+        state = CallGraph.start()
+        emit(meta.call_id, "stage_entered", {"turn": 0, "step": 0, "stage": state.stage_id, "from": None, "cleared": []})
         processors = [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
             create_user_aggregator(meta, on_completed_turn),
-            AgentReply(meta.call_id, repository),
+            AgentReply(meta.call_id, repository, state),
             create_tts(),
         ]
         logger.info(

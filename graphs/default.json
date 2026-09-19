@@ -1,0 +1,27 @@
+{
+  "entry": "assistant",
+  "nodes": [
+    {
+      "id": "assistant",
+      "prompt": "",
+      "tools": [
+        "get_clinic_catalogue",
+        "search_patients",
+        "get_patient_appointments",
+        "search_availability",
+        "register_patient",
+        "book_appointment",
+        "reschedule_appointment",
+        "cancel_appointment",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [],
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    }
+  ],
+  "edges": []
+}

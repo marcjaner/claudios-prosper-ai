@@ -62,13 +62,16 @@ class ClinicTools:
         return self._api.escalate(OutcomeRequest(call_id=self._call_id, reason=reason))
 
 
+CLINIC_TOOL_NAMES = (
+    "get_clinic_catalogue", "search_patients", "get_patient_appointments", "search_availability",
+    "register_patient", "book_appointment", "reschedule_appointment",
+    "cancel_appointment", "submit_no_action", "escalate_to_human",
+)
+
+
 def create_clinic_tools(api: ClinicApi, call_id: str) -> list[Callable[..., Any]]:
     tools = ClinicTools(api, call_id)
-    return [getattr(tools, name) for name in (
-        "get_clinic_catalogue", "search_patients", "get_patient_appointments", "search_availability",
-        "register_patient", "book_appointment", "reschedule_appointment",
-        "cancel_appointment", "submit_no_action", "escalate_to_human",
-    )]
+    return [getattr(tools, name) for name in CLINIC_TOOL_NAMES]
 
 
 def load_tools(functions: list[Callable[..., Any]]) -> dict[str, dict[str, Any]]:
