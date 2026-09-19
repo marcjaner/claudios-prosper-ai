@@ -34,6 +34,7 @@ class FakeRepository:
     def __init__(self):
         self.events = []
         self.submissions = []
+        self.workflow = {"stage": "identify"}
 
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
@@ -43,6 +44,12 @@ class FakeRepository:
 
     async def record_submission(self, *arguments):
         self.submissions.append(arguments)
+
+    async def workflow_for_call(self, _call_id):
+        return self.workflow
+
+    async def save_workflow(self, _call_id, state):
+        self.workflow = state
 
 
 class FakeClinicApi:

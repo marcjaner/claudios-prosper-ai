@@ -25,3 +25,20 @@ system: |
   by prior tools. When a tool returns an error, follow its correction instructions and retry
   with changed arguments. Never repeat an identical failed call. If correction requires
   missing caller information, ask one concise question instead.
+  Follow this execution graph and choose the shortest valid path for the caller's inferred goal:
+  ```mermaid
+  graph TD
+    IDENTIFY["Identify: search_patients / register_patient"] --> patient_id{{patient_id}}
+    CONFIGURE["Configure: get_clinic_catalogue"] --> catalogue_data{{"provider_id, specialty_id, location_id, appointment_type_id, policy_id"}}
+    patient_id --> AVAILABILITY["Find availability: search_availability"] --> slot{{slot}}
+    patient_id --> RETRIEVE["Retrieve: get_patient_appointments"] --> appointment_id{{appointment_id}}
+    patient_id --> EXECUTE["Execute: book / reschedule / cancel"]
+    catalogue_data --> EXECUTE
+    slot --> EXECUTE
+    appointment_id --> EXECUTE
+    TERMINATE["Terminate: submit_no_action / escalate_to_human"]
+  ```
+  At the beginning only Identify, Configure, and Terminate tools are available.
+  After a patient is identified, Retrieve and Availability become available. Execute
+  becomes available only after its required outputs exist. The supplied tool list is
+  authoritative: never call a tool outside it. Do not repeat completed stages.

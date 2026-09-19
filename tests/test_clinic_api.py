@@ -203,8 +203,8 @@ def test_availability_requires_provider_or_specialty(
 
 def test_per_call_tools_hide_call_id_and_generate_expected_schema(api: ClinicApi):
     tools = load_tools(create_clinic_tools(api, "CA-42"))
-    booking = tools["book_appointment"]["definition"]["function"]["parameters"]
-    availability = tools["search_availability"]["definition"]["function"]["parameters"]
+    booking = tools["book_appointment"].parameters
+    availability = tools["search_availability"].parameters
 
     assert "call_id" not in booking["properties"]
     assert availability["properties"]["insurers"] == {

@@ -11,11 +11,14 @@ from agent.llm import (
     ToolCompletion,
     Usage,
 )
-from agent.models import AgentResponse
+from agent.models import AgentResponse, Tool
 from storage import CallRepository
 
 
 class FakeRepository:
+    def __init__(self):
+        self.workflow = {"stage": "identify"}
+
     async def append_event(self, *_args):
         return None
 
@@ -24,6 +27,12 @@ class FakeRepository:
 
     async def record_submission(self, *_args):
         return None
+
+    async def workflow_for_call(self, _call_id):
+        return self.workflow
+
+    async def save_workflow(self, _call_id, state):
+        self.workflow = state
 
 
 class FakeClinicApi:
@@ -100,10 +109,9 @@ def test_clinic_tool_does_not_block_event_loop(monkeypatch):
             )
 
     tools = {
-        "search_patients": {
-            "definition": {},
-            "execute": slow_tool,
-        }
+        "search_patients": Tool(
+            name="search_patients", parameters={}, execute=slow_tool
+        )
     }
     monkeypatch.setattr(agent, "load_tools", lambda _functions: tools)
     monkeypatch.setattr(agent.ClinicApi, "from_environment", lambda: FakeClinicApi())

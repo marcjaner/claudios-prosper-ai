@@ -16,6 +16,7 @@ from .clinic_models import (
     RegisterPatientRequest,
     RescheduleRequest,
 )
+from .models import Tool
 
 DateValue = Annotated[str, "ISO date in YYYY-MM-DD format."]
 AvailabilityStartDate = Annotated[
@@ -234,8 +235,8 @@ def create_clinic_tools(api: ClinicApi, call_id: str) -> list[Callable[..., Any]
     ]
 
 
-def load_tools(functions: list[Callable[..., Any]]) -> dict[str, dict[str, Any]]:
-    loaded = {}
+def load_tools(functions: list[Callable[..., Any]]) -> dict[str, Tool]:
+    loaded: dict[str, Tool] = {}
     for function in functions:
         function_name = getattr(function, "__name__", type(function).__name__)
         hints = get_type_hints(function, include_extras=True)
@@ -248,22 +249,17 @@ def load_tools(functions: list[Callable[..., Any]]) -> dict[str, dict[str, Any]]
             for name, parameter in inspect.signature(function).parameters.items()
             if parameter.default is inspect.Parameter.empty
         ]
-        loaded[function_name] = {
-            "definition": {
-                "type": "function",
-                "function": {
-                    "name": function_name,
-                    "description": inspect.getdoc(function) or "",
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                        "additionalProperties": False,
-                    },
-                },
+        loaded[function_name] = Tool(
+            name=function_name,
+            description=inspect.getdoc(function) or "",
+            parameters={
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": False,
             },
-            "execute": function,
-        }
+            execute=function,
+        )
     return loaded
 
 

@@ -34,9 +34,26 @@ class CallRepository:
                 call_id=call_id,
                 from_number_hint=from_number_hint,
                 started_at=started_at,
+                workflow_stage="identify",
+                workflow_state={},
             )
             session.add(call)
         return call
+
+    async def workflow_for_call(self, call_id: str) -> dict[str, Any]:
+        async with self.database.session() as session:
+            call = await session.get(Call, call_id)
+            if call is None:
+                raise ValueError(f"unknown call_id: {call_id}")
+            return {"stage": call.workflow_stage, **(call.workflow_state or {})}
+
+    async def save_workflow(self, call_id: str, state: dict[str, Any]) -> None:
+        async with self.database.session() as session, session.begin():
+            call = await session.get(Call, call_id)
+            if call is None:
+                raise ValueError(f"unknown call_id: {call_id}")
+            call.workflow_stage = state.get("stage", "identify")
+            call.workflow_state = {key: value for key, value in state.items() if key != "stage"}
 
     async def append_event(
         self, call_id: str, event_type: str, payload: dict[str, Any]
