@@ -1,0 +1,661 @@
+{
+ "providers": [
+  {
+   "id": "PR01",
+   "name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "languages": [
+    "ca",
+    "en",
+    "es"
+   ],
+   "accepted_insurers": [
+    "adeslas",
+    "asisa",
+    "axa",
+    "caser",
+    "cigna",
+    "dkv",
+    "mapfre",
+    "nueva_mutua",
+    "privado",
+    "sanitas"
+   ],
+   "locations": [
+    "centro"
+   ],
+   "on_leave_until": null
+  },
+  {
+   "id": "PR02",
+   "name": "Dr. Pablo Requena",
+   "specialty_id": "general_practice",
+   "languages": [
+    "en",
+    "es"
+   ],
+   "accepted_insurers": [
+    "adeslas",
+    "asisa",
+    "axa",
+    "caser",
+    "cigna",
+    "dkv",
+    "mapfre",
+    "nueva_mutua",
+    "privado",
+    "sanitas"
+   ],
+   "locations": [
+    "norte"
+   ],
+   "on_leave_until": "2026-09-30"
+  },
+  {
+   "id": "PR03",
+   "name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "languages": [
+    "en",
+    "es"
+   ],
+   "accepted_insurers": [
+    "adeslas",
+    "asisa",
+    "axa",
+    "caser",
+    "cigna",
+    "dkv",
+    "mapfre",
+    "nueva_mutua",
+    "privado",
+    "sanitas"
+   ],
+   "locations": [
+    "centro",
+    "sur"
+   ],
+   "on_leave_until": null
+  },
+  {
+   "id": "PR07",
+   "name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "languages": [
+    "es"
+   ],
+   "accepted_insurers": [
+    "adeslas",
+    "asisa",
+    "axa",
+    "caser",
+    "cigna",
+    "dkv",
+    "mapfre",
+    "nueva_mutua",
+    "privado",
+    "sanitas"
+   ],
+   "locations": [
+    "centro",
+    "norte"
+   ],
+   "on_leave_until": null
+  }
+ ],
+ "appointment_type": {
+  "id": "first_visit",
+  "name": "First Visit",
+  "duration_minutes": 30,
+  "new_patient_requirement": "new_only",
+  "guidance": "Any specialty with no first visit of its own — general practice, and gynaecology, which carries only its own review. Correct when the record says the clinic has never seen this patient, whatever they ask for on the call."
+ },
+ "slots": [
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-21T09:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-21T09:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-21T09:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-21T11:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-21T11:45:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-21T12:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T09:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T09:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T09:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T09:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T09:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T10:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T11:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T11:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T12:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T13:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-22T13:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T09:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T09:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T09:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T09:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T09:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T09:45:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T10:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T10:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T10:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T11:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T13:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T13:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T13:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-23T13:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T09:45:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "sur",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T11:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T11:45:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T12:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T12:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T13:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "norte",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T13:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-24T13:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T09:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T10:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T10:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T11:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T11:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T12:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T12:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR01",
+   "provider_name": "Dra. Carmen Ortiz Vidal",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T12:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T12:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR03",
+   "provider_name": "Dr. Martín Sáez",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T12:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T12:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T12:45:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T13:00:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T13:15:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  },
+  {
+   "provider_id": "PR07",
+   "provider_name": "Dra. Laura Benítez Roca",
+   "specialty_id": "general_practice",
+   "location_id": "centro",
+   "appointment_type_id": "first_visit",
+   "start_time": "2026-09-25T13:30:00+02:00",
+   "duration_minutes": 30,
+   "payable_with": []
+  }
+ ],
+ "blocked": [
+  {
+   "provider_id": "PR02",
+   "restriction": "provider_on_leave"
+  }
+ ]
+}
