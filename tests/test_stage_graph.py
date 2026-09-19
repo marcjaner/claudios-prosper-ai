@@ -18,8 +18,10 @@ BOOK = {
     "tools": ["book_appointment", "search_availability"],
     "clears": ["slot"],
 }
+SYSTEM = "Speak in short sentences and never invent a slot."
 TWO_STAGE = {
     "entry": "identify",
+    "system": SYSTEM,
     "nodes": [IDENTIFY, BOOK],
     "edges": [{"from": "identify", "to": "book", "requires": ["patient_id"]}],
 }
@@ -167,6 +169,16 @@ def test_record_facts_rejects_a_nested_payload():
     assert state.refuse_reason("record_facts", {"facts": {"a": "b"}}) == ""
 
 
+def test_the_running_graph_supplies_the_system_prompt():
+    """The prompt is configuration the builder saves, not a file sitting beside the code."""
+    state = two_stage_state()
+    client = FakeClient(says("Who is calling?"))
+
+    run_turn("hello", state, client, FakeRepository())
+
+    assert SYSTEM in client.prompts[0]
+
+
 def test_prompt_names_the_exact_keys_a_transition_needs():
     from agent.stage_runtime import render_context
 
@@ -308,6 +320,12 @@ def test_graph_api_round_trips_and_refuses_a_broken_graph(tmp_path, monkeypatch)
     renamed = {**TWO_STAGE, "nodes": [{**IDENTIFY, "prompt": "Ask for their ID."}, BOOK]}
     assert client.put("/api/graph", json=renamed).status_code == 200
     assert graph_module.load_graph(path).node("identify").prompt == "Ask for their ID."
+
+    # Editing the system prompt in the builder is the point of keeping it on the graph.
+    assert client.get("/api/graph").json()["system"] == SYSTEM
+    reworded = {**TWO_STAGE, "system": "Answer in Catalan."}
+    assert client.put("/api/graph", json=reworded).status_code == 200
+    assert graph_module.load_graph(path).system == "Answer in Catalan."
 
 
 # --- failure handling -------------------------------------------------------

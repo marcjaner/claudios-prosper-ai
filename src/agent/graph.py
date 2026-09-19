@@ -47,7 +47,15 @@ class Edge(BaseModel):
 
 
 class Graph(BaseModel):
+    """One agent configuration: how it speaks, and the stages it speaks through.
+
+    The system prompt lives here rather than beside the code so the builder owns
+    the whole configuration. Two copies of it, one editable and one not, is how
+    the graph and the prompt came to describe different agents.
+    """
+
     entry: str
+    system: str = ""
     nodes: list[Node]
     edges: list[Edge] = Field(default_factory=list)
 

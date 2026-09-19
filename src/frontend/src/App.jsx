@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import Builder from "./Builder.jsx";
 import CallDetail from "./CallDetail.jsx";
 import History from "./History.jsx";
 import Sparkline from "./Sparkline.jsx";
@@ -10,6 +11,12 @@ const VIEWS = {
   "#/wall": { label: "Wall", component: Wall },
   "#/historico": { label: "Histórico", component: History },
 };
+// Reachable by URL but deliberately out of the nav: the builder configures the
+// agent, it is not part of the console a clinic — or the jury — is shown.
+const TOOLS = {
+  "#/builder": { label: "Agente", component: Builder },
+};
+const ROUTES = { ...VIEWS, ...TOOLS };
 const DEFAULT_VIEW = "#/wall";
 
 function useHashRoute() {
@@ -48,8 +55,8 @@ export default function App() {
   const callMatch = route.match(CALL_ROUTE);
   const openCall = callMatch?.[1];
   const returnTo = callMatch?.[2] === "wall" ? "#/wall" : "#/historico";
-  const view = VIEWS[route] ? route : DEFAULT_VIEW;
-  const View = VIEWS[view].component;
+  const view = ROUTES[route] ? route : DEFAULT_VIEW;
+  const View = ROUTES[view].component;
   const clinicTheme = Boolean(openCall) || view === "#/wall" || view === "#/historico";
   const activeView = openCall ? returnTo : view;
 
