@@ -21,7 +21,7 @@ from tts import language_settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LANGUAGE = Language.ES
+DEFAULT_LANGUAGE = Language.EN
 AGREEING_TURNS = 2
 
 

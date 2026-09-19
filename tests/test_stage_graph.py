@@ -70,6 +70,12 @@ class FakeRepository:
         self.events: list[tuple[str, dict]] = []
         self.submissions: list[str] = []
 
+    async def seed_default_guardrails(self):
+        return None
+
+    async def list_guardrails(self):
+        return []
+
     async def append_event(self, _call_id, event_type, payload):
         self.events.append((event_type, payload))
 

@@ -254,6 +254,12 @@ class FakeRepository:
         self.submissions = []
         self.workflow = dict(state or {})
 
+    async def seed_default_guardrails(self):
+        return None
+
+    async def list_guardrails(self):
+        return []
+
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
 
@@ -422,6 +428,29 @@ def test_turn_no_action_records_reason_and_outcome(monkeypatch, bus):
     assert update[1]["reason"] == "no_availability"
     assert [s[1] for s in repository.submissions] == ["NO_ACTION"]
     assert len(responses) == 2
+
+
+def test_immediate_response_can_be_skipped_before_tts(monkeypatch, bus):
+    monkeypatch.setenv("SEND_IMMEDIATE_RESPONSES", "false")
+    responses, repository, _graph = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="Let me check.",
+            tool_calls=[
+                ToolCall(
+                    name="submit_no_action",
+                    arguments={"reason": "no_availability"},
+                )
+            ],
+        ),
+        FakeClinicApi(),
+    )
+
+    assert [response.immediate_answer for response in responses] == ["Hecho."]
+    assert not any(
+        event == "agent_response" and payload["text"] == "Let me check."
+        for _, event, payload in repository.events
+    )
 
 
 def test_turn_book_is_blocked_before_identification(monkeypatch, bus):

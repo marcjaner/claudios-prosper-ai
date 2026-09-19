@@ -16,6 +16,12 @@ from storage import CallRepository
 
 
 class FakeRepository:
+    async def seed_default_guardrails(self):
+        return None
+
+    async def list_guardrails(self):
+        return []
+
     async def append_event(self, *_args):
         return None
 

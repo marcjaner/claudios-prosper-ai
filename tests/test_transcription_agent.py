@@ -4,7 +4,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
-from pipecat.frames.frames import InterimTranscriptionFrame
+from pipecat.frames.frames import InterimTranscriptionFrame, TTSSpeakFrame
 from pipecat.processors.aggregators.llm_response_universal import (
     UserTurnStoppedMessage,
 )
@@ -12,7 +12,12 @@ from pipecat.processors.frame_processor import FrameDirection
 
 import observability
 from agent import transcription
-from agent.transcription import TranscriptObserver, create_user_aggregator
+from agent.transcription import (
+    EMPTY_TURN_RECOVERY_MESSAGE,
+    TranscriptObserver,
+    create_user_aggregator,
+)
+from observability.frames import TTSRequestedFrame
 from storage import Database
 from twilio import CallMeta
 
@@ -90,6 +95,34 @@ def test_completed_turn_emits_final_transcript_and_thinking_state(bus):
     assert ("CA456", {"state": "thinking"}) in bus.updates
 
 
+def test_empty_turn_asks_caller_to_repeat():
+    async def run():
+        frames = []
+        aggregator = create_user_aggregator(
+            make_meta(),
+            lambda *_: asyncio.sleep(0),
+        )
+
+        async def capture_frame(frame, _direction):
+            frames.append(frame)
+
+        aggregator.push_frame = capture_frame
+        message = UserTurnStoppedMessage(
+            content="",
+            timestamp="2026-09-18T21:00:00Z",
+        )
+        await aggregator._call_event_handler("on_user_turn_stopped", None, message)
+        return frames
+
+    frames = asyncio.run(run())
+
+    assert [type(frame) for frame in frames] == [TTSRequestedFrame, TTSSpeakFrame]
+    assert [frame.text for frame in frames] == [
+        EMPTY_TURN_RECOVERY_MESSAGE,
+        EMPTY_TURN_RECOVERY_MESSAGE,
+    ]
+
+
 def test_transcript_observer_emits_partial_and_forwards_the_frame(bus):
     class CapturingObserver(TranscriptObserver):
         def __init__(self, meta):
@@ -126,6 +159,9 @@ def test_concurrent_calls_initialize_the_shared_database_once(monkeypatch):
     class FakeRepository:
         def __init__(self, _database):
             self.call_ids = []
+
+        async def seed_default_guardrails(self):
+            return None
 
         async def create_call(self, call_id, *_args):
             self.call_ids.append(call_id)
