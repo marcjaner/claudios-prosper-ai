@@ -1,0 +1,324 @@
+import { createServer } from "node:http";
+import { resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+import { ROOT_CONTEXT, SpanStatusCode, trace, type Span } from "@opentelemetry/api";
+import WebSocket, { WebSocketServer } from "ws";
+import { AudioQueue, createMuLawGain } from "./audio.js";
+import { createCallRecordStore, type CallRecordEvent } from "./call-records.js";
+import type { VoiceFactory, VoiceSession } from "./azure-realtime.js";
+import type { Config } from "./config.js";
+import { Dashboard } from "./dashboard.js";
+import type { DashboardStore } from "./dashboard-store.js";
+import { AppError, errorCode } from "./errors.js";
+import { decodeAudio, parsePacket } from "./protocol.js";
+import { log } from "./telemetry.js";
+import { voiceProfile } from "./voice-provider.js";
+
+type CallRecordStore = ReturnType<typeof createCallRecordStore>;
+type CallRecorder = ReturnType<CallRecordStore["start"]>;
+const CONFIRMATION_REPROMPT_DELAY_MS = 12_000;
+const CONFIRMATION_REPROMPT = "Do not call any tool. Say exactly this and nothing else: I'm still here. Please say yes to register these details, or tell me what I should correct.";
+
+export function createVoiceServer(
+  config: Config,
+  openVoice: VoiceFactory,
+  telemetryMode: "azure" | "console",
+  recordStore?: CallRecordStore,
+  dashboardStore?: DashboardStore,
+) {
+  const profile = voiceProfile(config);
+  const outputGain = createMuLawGain(profile.outputGainDb);
+  const records = recordStore ?? (config.CALL_RECORDING_ENABLED && process.platform === "linux" ? createCallRecordStore({
+    directory: resolve(".local/calls"),
+    retentionDays: config.CALL_RECORDING_RETENTION_DAYS,
+    recordAudio: config.CALL_AUDIO_RECORDING_ENABLED,
+    secrets: [
+      config.PROSPER_API_KEY, config.AZURE_OPENAI_API_KEY ?? "", config.OPENAI_API_KEY ?? "",
+      config.APPLICATIONINSIGHTS_CONNECTION_STRING ?? "", config.TYPESAFE_API_KEY ?? "",
+    ],
+  }) : undefined);
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+  const dashboard = new Dashboard(config.TYPESAFE_API_KEY ? {
+    apiKey: config.TYPESAFE_API_KEY,
+    model: config.TYPESAFE_DEFAULT_MODEL,
+  } : undefined, dashboardStore);
+  const calls = new Map<string, () => Promise<void>>();
+  const disconnects = new Map<WebSocket, () => Promise<void>>();
+  let shuttingDown = false;
+  let closing: Promise<void> | undefined;
+  const server = createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/healthz") {
+      response.writeHead(shuttingDown ? 503 : 200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        status: shuttingDown ? "stopping" : "ok",
+        activeCalls: calls.size,
+        telemetry: telemetryMode,
+        capabilities: ["voice", "clinic", "book", "reschedule", "cancel", "register", "outcomes"],
+        localRecording: Boolean(records),
+        localAudioRecording: Boolean(records && config.CALL_AUDIO_RECORDING_ENABLED),
+        dashboardStorage: dashboardStore ? "sqlite" : "memory",
+        voiceProvider: profile.provider,
+        voiceConnector: profile.connector,
+        voiceDeployment: profile.deployment,
+        ...("backendDeployment" in profile ? { voiceBackendDeployment: profile.backendDeployment } : {}),
+        voiceOutputGainDb: profile.outputGainDb,
+      }));
+      return;
+    }
+    void dashboard.handleHttp(request, response).then((handled) => {
+      if (!handled) response.writeHead(404).end();
+    }).catch(() => {
+      if (!response.headersSent) response.writeHead(500);
+      response.end();
+    });
+  });
+  server.on("upgrade", (request, socket, head) => {
+    const reject = (status: string) => {
+      socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    };
+    if (dashboard.handleUpgrade(request, socket, head)) return;
+    if (request.url !== "/ws") return reject("404 Not Found");
+    if (shuttingDown || sockets.clients.size >= config.MAX_CONCURRENT_CALLS) {
+      log("warn", "websocket.capacity_reached");
+      return reject("503 Service Unavailable");
+    }
+    sockets.handleUpgrade(request, socket, head, (client) => sockets.emit("connection", client));
+  });
+
+  sockets.on("connection", (client) => {
+    const controller = new AbortController();
+    // Advance a remote semantic VAD's audio clock without streaming silence indefinitely.
+    const audio = new AudioQueue(1500, 200);
+    let voice: VoiceSession | undefined;
+    let opening: Promise<void> | undefined;
+    let streamId: string | undefined;
+    let callId: string | undefined;
+    let closed = false;
+    let stopPromise: Promise<void> | undefined;
+    let span: Span | undefined;
+    let recorder: CallRecorder | undefined;
+    let recordingStartedAt: number | undefined;
+    let endReason = "socket_closed";
+    const pending: string[] = [];
+    let inputBytes = 0;
+    let outputBytes = 0;
+    let playback: NodeJS.Timeout | undefined;
+    let callDeadline: NodeJS.Timeout | undefined;
+    let confirmationReprompt: NodeJS.Timeout | undefined;
+    let pendingProposalId: string | undefined;
+    let confirmationReprompted = false;
+    const startDeadline = setTimeout(() => fail(new AppError("missing_start")), 10_000);
+
+    function clearConfirmationReprompt(): void {
+      clearTimeout(confirmationReprompt);
+      confirmationReprompt = undefined;
+    }
+
+    function trackConfirmation(event: CallRecordEvent): void {
+      if (event.type === "action") {
+        if (event.stage === "proposed") {
+          if (!event.action || typeof event.action !== "object" ||
+              !("action" in event.action) || event.action.action !== "REGISTER") return;
+          pendingProposalId = event.proposalId;
+          confirmationReprompted = false;
+          clearConfirmationReprompt();
+        } else if (event.proposalId === pendingProposalId) {
+          pendingProposalId = undefined;
+          clearConfirmationReprompt();
+        }
+        return;
+      }
+      if (event.type !== "transcript") return;
+      if (event.speaker === "user") {
+        if (pendingProposalId) confirmationReprompted = true;
+        clearConfirmationReprompt();
+        return;
+      }
+      if (event.partial || !pendingProposalId || confirmationReprompted || confirmationReprompt) return;
+      confirmationReprompt = setTimeout(() => {
+        confirmationReprompt = undefined;
+        confirmationReprompted = true;
+        if (closed || !pendingProposalId) return;
+        const requested = voice?.requestSpeech?.(CONFIRMATION_REPROMPT) === true;
+        log("info", "voice.confirmation_reprompt", { callId: callId ?? "not-started", requested });
+      }, CONFIRMATION_REPROMPT_DELAY_MS);
+    }
+
+    function record(event: CallRecordEvent): void {
+      trackConfirmation(event);
+      recorder?.append(event);
+      if (callId) dashboard.record(callId, event);
+    }
+
+    function stop(): Promise<void> {
+      if (stopPromise) return stopPromise;
+      closed = true;
+      clearTimeout(startDeadline);
+      clearTimeout(callDeadline);
+      clearConfirmationReprompt();
+      clearInterval(playback);
+      controller.abort();
+      pending.length = 0;
+      audio.interrupt();
+      if (client.readyState === WebSocket.OPEN) client.close(1000);
+      const forceClose = setTimeout(() => client.terminate(), 1000);
+      forceClose.unref();
+      client.once("close", () => clearTimeout(forceClose));
+      stopPromise = (async () => {
+        try {
+          if (opening) await opening;
+          await voice?.close();
+        } finally {
+          try { recorder?.finish({ reason: endReason, inputBytes, outputBytes }); }
+          finally {
+            if (callId) dashboard.finish(callId, endReason);
+            if (callId) calls.delete(callId);
+            disconnects.delete(client);
+            span?.setAttributes({ "voice.input_bytes": inputBytes, "voice.output_bytes": outputBytes });
+            span?.end();
+            log("info", "call.closed", { callId: callId ?? "not-started", inputBytes, outputBytes, reason: endReason });
+          }
+        }
+      })();
+      return stopPromise;
+    }
+
+    function fail(error: unknown): void {
+      if (closed) return;
+      const code = errorCode(error);
+      endReason = code;
+      span?.setStatus({ code: SpanStatusCode.ERROR, message: code });
+      log("error", "call.failed", { callId: callId ?? "not-started", code });
+      try { record({ type: "error", code }); }
+      catch { log("error", "call.recording_failed", { callId: callId ?? "not-started" }); }
+      void stop().catch(() => log("error", "call.cleanup_failed", { callId: callId ?? "not-started" }));
+    }
+    disconnects.set(client, () => { endReason = "server_shutdown"; return stop(); });
+
+    client.on("message", (raw, binary) => {
+      if (closed) return;
+      try {
+        if (binary) throw new AppError("unexpected_binary_packet");
+        const packet = parsePacket(raw.toString());
+        if (packet.event === "connected") return;
+        if (packet.event === "start") {
+          if (callId) throw new AppError("duplicate_start");
+          if (calls.has(packet.start.callSid)) throw new AppError("duplicate_call_id");
+          clearTimeout(startDeadline);
+          callId = packet.start.callSid;
+          streamId = packet.start.streamSid;
+          calls.set(callId, stop);
+          const startedAt = new Date();
+          recordingStartedAt = performance.now();
+          recorder = records?.start(callId, startedAt);
+          dashboard.start(callId, startedAt, packet.start.customParameters?.from_number, () => {
+            endReason = "operator_stop";
+            return stop();
+          });
+          span = trace.getTracer("virtual-agents").startSpan("invoke_agent virtual_agent", {
+            attributes: {
+              "gen_ai.operation.name": "invoke_agent",
+              "gen_ai.agent.name": "virtual-agent",
+              "gen_ai.system": profile.provider === "azure" ? "azure.ai.openai" : "openai",
+              "gen_ai.request.model": profile.deployment,
+              "prosper.call_id": callId,
+            },
+          }, ROOT_CONTEXT);
+          callDeadline = setTimeout(() => fail(new AppError("call_time_limit")), 180_000);
+          playback = setInterval(() => {
+            try {
+              const queued = audio.next();
+              if (!queued || client.readyState !== WebSocket.OPEN) return;
+              const frame = outputGain(queued);
+              dashboard.markFirstAudio(callId!);
+              if (client.bufferedAmount > 1024 * 1024) throw new AppError("client_backpressure");
+              client.send(JSON.stringify({ event: "media", streamSid: streamId, media: {
+                payload: frame.toString("base64"),
+              } }));
+              outputBytes += frame.length;
+              if (recordingStartedAt !== undefined) {
+                recorder?.appendAudio("agent", frame, performance.now() - recordingStartedAt);
+              }
+            } catch (error) { fail(error); }
+          }, 20);
+          log("info", "call.started", { callId });
+          opening = openVoice({
+            callId,
+            startedAt,
+            allowSubmissions: true,
+            onRecord: record,
+            parent: trace.setSpan(ROOT_CONTEXT, span),
+            signal: controller.signal,
+            greet: true,
+            onAudio: (chunk) => { if (!closed) audio.push(chunk); },
+            onAudioDone: (item) => { if (!closed) audio.finish(item); },
+            onInterrupt: () => {
+              span?.addEvent("voice.interrupted");
+              return audio.interruptAll();
+            },
+            onFailure: fail,
+            onTurnDone: () => {
+              dashboard.setState(callId!, "listening");
+              span?.addEvent(profile.connector === "live" ? "voice.backend_completed" : "voice.turn_completed");
+            },
+          }).then(async (session) => {
+            voice = session;
+            if (closed) { await session.close(); return; }
+            dashboard.setState(callId!, "listening");
+            for (const payload of pending) session.sendAudio(payload);
+            pending.length = 0;
+          }).catch((error: unknown) => { if (!closed) fail(error); });
+          return;
+        }
+        if (!streamId || packet.streamSid !== streamId) throw new AppError("stream_id_mismatch");
+        if (packet.event === "stop") {
+          endReason = "prosper_stop";
+          void stop().catch(() => log("error", "call.cleanup_failed", { callId: callId ?? "not-started" }));
+        } else if (packet.event === "media") {
+          const bytes = decodeAudio(packet.media.payload);
+          if (bytes.length !== 160) throw new AppError("unsupported_audio_frame_size");
+          inputBytes += bytes.length;
+          if (recordingStartedAt !== undefined) {
+            recorder?.appendAudio("caller", bytes, performance.now() - recordingStartedAt);
+          }
+          if (voice) voice.sendAudio(packet.media.payload);
+          else {
+            if (pending.length >= 500) throw new AppError("audio_input_backpressure");
+            pending.push(packet.media.payload);
+          }
+        }
+      } catch (error) { fail(error); }
+    });
+    client.on("error", () => fail(new AppError("client_websocket_error")));
+    client.on("close", () => {
+      void stop().catch(() => log("error", "call.cleanup_failed", { callId: callId ?? "not-started" }));
+    });
+  });
+
+  return {
+    async listen(): Promise<number> {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(config.PORT, config.HOST, () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new AppError("invalid_listen_address");
+      return address.port;
+    },
+    close(): Promise<void> {
+      if (closing) return closing;
+      shuttingDown = true;
+      closing = (async () => {
+        const stopped = [...disconnects.values()].map((stop) => stop());
+        await Promise.all(stopped);
+        await dashboard.close();
+        await new Promise<void>((resolve) => sockets.close(() => resolve()));
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      })();
+      return closing;
+    },
+  };
+}
