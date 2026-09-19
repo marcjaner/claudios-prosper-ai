@@ -4,7 +4,14 @@ from typing import Any
 from sqlalchemy import select, update
 
 from .database import Database
-from .models import ApiObservation, Call, CallEvent, ClinicCatalogue, Guardrail, Submission
+from .models import (
+    ApiObservation,
+    Call,
+    CallEvent,
+    ClinicCatalogue,
+    Guardrail,
+    Submission,
+)
 
 
 def now() -> datetime:

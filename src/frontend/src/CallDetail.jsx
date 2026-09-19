@@ -29,22 +29,6 @@ function formatDuration(call) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function Submission({ event }) {
-  const failed = event.payload.status >= 400;
-  return (
-    <details className="clinic-panel px-5 py-4">
-      <summary className="cursor-pointer rounded text-sm font-semibold text-slate-700 focus-visible:outline-2 focus-visible:outline-emerald-500">
-        Submitted record
-        <span className={`ml-3 text-xs ${failed ? "text-rose-600" : "text-emerald-700"}`}>{event.payload.status}</span>
-      </summary>
-      <p className="mt-3 break-all font-mono text-xs text-slate-500">{event.payload.route}</p>
-      <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 p-4 font-mono text-xs leading-relaxed text-slate-200">
-        {JSON.stringify(event.payload.request ?? {}, null, 2)}
-      </pre>
-    </details>
-  );
-}
-
 export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   const [stored, setStored] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -76,7 +60,6 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
     ...liveEvents.filter((event) => !seen.has(`${event.ts}-${event.kind}`)),
   ].sort((a, b) => a.ts - b.ts);
 
-  const submission = events.find((event) => event.kind === "submit");
   const hasStageTrace = events.some(({ kind }) =>
     ["stage_entered", "fact_recorded", "tool_rejected", "transition_rejected", "turn_finished"].includes(kind),
   );
@@ -90,8 +73,8 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   }
 
   return (
-    <main className="clinic-page space-y-5">
-      <header className="flex flex-wrap items-center justify-between gap-3">
+    <main className="clinic-page space-y-5 xl:flex xl:min-h-0 xl:w-full xl:flex-1 xl:flex-col xl:gap-5 xl:space-y-0 xl:overflow-hidden">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <a href={returnTo} className="rounded text-sm font-medium text-emerald-700 transition-colors hover:text-emerald-900 focus-visible:outline-2 focus-visible:outline-emerald-500">
             ← Back
@@ -116,7 +99,7 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
         </div>
       </header>
 
-      <aside aria-label="Patient information" className="clinic-panel min-w-0 p-5">
+      <aside aria-label="Patient information" className="clinic-panel min-w-0 shrink-0 p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs text-slate-400">Patient</p>
@@ -139,8 +122,19 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
         {call.error && <p className="mt-3 break-words rounded-xl bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">{call.error}</p>}
       </aside>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        <AgentActions key={callId} events={events} startedAt={call.started_at} live={live} />
+      <div className="call-detail-panels grid min-h-0 gap-4 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] xl:overflow-hidden">
+        <AgentActions key={callId} events={events} startedAt={call.started_at} live={live}>
+          {hasStageTrace && (
+            <details className="border-t border-slate-100 px-4 py-4">
+              <summary className="cursor-pointer rounded text-sm font-semibold text-slate-700 focus-visible:outline-2 focus-visible:outline-emerald-500">
+                Technical journey details
+              </summary>
+              <div className="mt-3">
+                <StageTrace events={events} startedAt={call.started_at} />
+              </div>
+            </details>
+          )}
+        </AgentActions>
         <section aria-label="Conversation transcript" className="call-panel">
           <div className="call-panel-header">
             <div>
@@ -154,18 +148,6 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
           </div>
         </section>
       </div>
-
-      {hasStageTrace && (
-        <details className="clinic-panel px-5 py-4">
-          <summary className="cursor-pointer rounded text-sm font-semibold text-slate-700 focus-visible:outline-2 focus-visible:outline-emerald-500">
-            Technical journey details
-          </summary>
-          <div className="mt-3">
-            <StageTrace events={events} startedAt={call.started_at} />
-          </div>
-        </details>
-      )}
-      {submission && <Submission event={submission} />}
     </main>
   );
 }

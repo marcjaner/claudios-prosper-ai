@@ -38,7 +38,7 @@ function ActionItem({ action, startedAt }) {
   );
 }
 
-export default function AgentActions({ events, startedAt, live = false }) {
+export default function AgentActions({ events, startedAt, live = false, children }) {
   const actions = useMemo(() => buildAgentActions(events, { live }), [events, live]);
   const headingId = useId();
   return (
@@ -52,24 +52,26 @@ export default function AgentActions({ events, startedAt, live = false }) {
           {actions.length} {actions.length === 1 ? "action" : "actions"}
         </span>
       </div>
-      {actions.length ? (
-        <ol
-          aria-label="Recorded actions in chronological order"
-          tabIndex={0}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-300"
-        >
-          {actions.map((action) => <ActionItem key={action.order} action={action} startedAt={startedAt} />)}
-        </ol>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
-          <p className="text-sm font-medium text-slate-700">No recorded actions</p>
-          <p className="mt-2 max-w-xs text-sm leading-relaxed text-slate-500">
-            {live
-              ? "Actions will appear here as the call progresses."
-              : "No assistant actions were recorded for this call."}
-          </p>
-        </div>
-      )}
+      <div
+        tabIndex={0}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-300"
+      >
+        {actions.length ? (
+          <ol aria-label="Recorded actions in chronological order" className="px-4 pb-2">
+            {actions.map((action) => <ActionItem key={action.order} action={action} startedAt={startedAt} />)}
+          </ol>
+        ) : (
+          <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
+            <p className="text-sm font-medium text-slate-700">No recorded actions</p>
+            <p className="mt-2 max-w-xs text-sm leading-relaxed text-slate-500">
+              {live
+                ? "Actions will appear here as the call progresses."
+                : "No assistant actions were recorded for this call."}
+            </p>
+          </div>
+        )}
+        {children}
+      </div>
     </section>
   );
 }

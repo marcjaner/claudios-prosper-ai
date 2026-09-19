@@ -26,7 +26,6 @@ def register_dashboard(app: FastAPI) -> None:
     @app.put("/api/guardrails")
     async def replace_guardrails(request: Request) -> dict:
         payload = await request.json()
-        texts = payload.get("guardrails")
         rules = payload.get("guardrails")
         if not isinstance(rules, list) or not all(isinstance(rule, dict) for rule in rules):
             raise HTTPException(status_code=422, detail="guardrails must be a list of objects")

@@ -37,3 +37,9 @@
 .clinic-theme .call-panel-header {
   @apply border-slate-100;
 }
+
+@media (min-width: 80rem) {
+  .call-detail-panels .call-panel {
+    height: 100%;
+  }
+}

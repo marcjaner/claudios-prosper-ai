@@ -197,13 +197,70 @@ def test_api_errors_preserve_status_and_response():
     assert error.value.detail == {"detail": "bad request"}
 
 
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "message"),
+    [
+        ("2026-09-21", "2026-10-05", "at most 14 inclusive days"),
+        ("2026-09-25", "2026-09-21", "on or after date_from"),
+        ("21-09-2026", "2026-09-25", "YYYY-MM-DD"),
+    ],
+)
+def test_availability_rejects_invalid_ranges_before_request(
+    api: ClinicApi,
+    prosper: FakeProsper,
+    date_from: str,
+    date_to: str,
+    message: str,
+):
+    with pytest.raises(ValueError, match=message):
+        api.search_availability(
+            date_from=date_from,
+            date_to=date_to,
+            specialty_id="general_practice",
+        )
+
+    assert prosper.requests == []
+
+
+def test_availability_requires_provider_or_specialty(
+    api: ClinicApi, prosper: FakeProsper
+):
+    with pytest.raises(ValueError, match="provider_id or specialty_id"):
+        api.search_availability(date_from="2026-09-21", date_to="2026-09-25")
+
+    assert prosper.requests == []
+
+
 def test_per_call_tools_hide_call_id_and_generate_expected_schema(api: ClinicApi):
     tools = load_tools(create_clinic_tools(api, "CA-42"))
-    booking = tools["book_appointment"].definition["function"]["parameters"]
-    availability = tools["search_availability"].definition["function"]["parameters"]
+    booking = tools["book_appointment"].parameters
+    availability = tools["search_availability"].parameters
 
     assert "call_id" not in booking["properties"]
     assert availability["properties"]["insurers"] == {
         "type": "array",
-        "items": {"type": "string"},
+        "items": {
+            "type": "string",
+            "enum": [
+                "sanitas",
+                "adeslas",
+                "dkv",
+                "asisa",
+                "mapfre",
+                "caser",
+                "cigna",
+                "axa",
+                "nueva_mutua",
+                "privado",
+            ],
+        },
     }
+    assert availability["properties"]["specialty_id"]["enum"] == [
+        "general_practice",
+        "paediatrics",
+        "dermatology",
+        "orthopaedics",
+        "gynaecology",
+        "physiotherapy",
+    ]
+    assert "at most 14 days" in availability["properties"]["date_to"]["description"]
