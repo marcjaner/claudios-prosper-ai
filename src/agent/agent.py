@@ -612,6 +612,8 @@ def _plan_batch(completion: ToolCompletion, state: CallGraph, call_id: str, step
             _refuse(batch, state, call, reason, call_id, step)
         else:
             batch.transition = call
+    if batch.transition is None and (target := state.ready_fact_transition()):
+        batch.transition = ToolCall(name=GO_TO_TOOL, arguments={"stage": target})
     return batch
 
 
@@ -706,20 +708,31 @@ async def _run_tool(
         )
         _logger.warning("tool failed | call_id=%s tool=%s error=%s", call_id, call.name, exc)
         status = getattr(exc, "status_code", 500)
-        emit(call_id, "tool_result", {
-            "name": call.name, "tool_call_id": tool_call_id, "status": status,
-            "ms": _duration_ms(started_ns), "error": f"the request failed with status {status}",
-        })
-        can_retry = call.name not in SUBMISSION_TOOL_NAMES or isinstance(
-            exc, (ProsperApiError, TypeError, ValueError, LookupError)
+        can_retry = (
+            call.name not in SUBMISSION_TOOL_NAMES
+            or (isinstance(exc, ProsperApiError) and exc.status_code == 422)
+            or isinstance(exc, (TypeError, ValueError, LookupError))
         )
         output = _tool_error_output(exc, can_retry=can_retry)
+        emit(
+            call_id,
+            "tool_result",
+            {
+                "name": call.name,
+                "tool_call_id": tool_call_id,
+                "status": status,
+                "ms": _duration_ms(started_ns),
+                "error": f"the request failed with status {status}",
+                "detail": output["detail"],
+            },
+        )
         await repository.append_event(
             call_id, "tool_result", {"name": call.name, "output": output}
         )
-        if not can_retry:
+        if call.name in SUBMISSION_TOOL_NAMES and can_retry:
+            state.failed_calls.add(state.signature(call.name, call.arguments))
+        elif not can_retry:
             state.failed_tools.add(call.name)
-        # The model sees that it failed, never the provider's own words.
         return Operation(
             call.name,
             call.arguments,
