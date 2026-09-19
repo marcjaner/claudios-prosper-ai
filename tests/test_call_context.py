@@ -1,8 +1,9 @@
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from agent.call_context import CallContext
+from agent.clinic_api import ClinicApi
 from agent.tools import ClinicTools
 
 PATIENT_ID = "P00042"
@@ -67,7 +68,7 @@ def verified_tools(
 ) -> tuple[FakeClinicApi, CallContext, ClinicTools]:
     api = FakeClinicApi()
     context = CallContext(call_id)
-    tools = ClinicTools(api, context)
+    tools = ClinicTools(cast(ClinicApi, api), context)
     tools.search_patients(national_id="12345678Z")
     return api, context, tools
 
@@ -88,7 +89,7 @@ def test_context_survives_tool_instances_and_is_isolated_per_call():
     first_context.begin_turn()
     slot_id = search_slot(first_tools)["slots"][0]["slot_id"]
 
-    next_turn_tools = ClinicTools(first_api, first_context)
+    next_turn_tools = ClinicTools(cast(ClinicApi, first_api), first_context)
     proposal = next_turn_tools.prepare_booking(slot_id, "sanitas")
 
     assert proposal["request_id"] == "req_1"

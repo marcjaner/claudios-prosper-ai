@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +11,10 @@ from fastapi.responses import FileResponse
 from loguru import logger
 from sqlalchemy.engine import make_url
 
-from observability import EventBus, Store, set_bus
+from observability import EventBus, Store, set_bus, subscribe
 from observability.api import register_dashboard
+from scoring import DEFAULT_MODEL, run_scoring_worker
+from storage import CallRepository, Database
 
 from .transport import AgentFactory, run_call
 
@@ -70,19 +72,41 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        guardrail_database = Database()
+        await guardrail_database.init()
+        app.state.guardrail_database = guardrail_database
+        app.state.guardrail_repository = CallRepository(guardrail_database)
+        await app.state.guardrail_repository.seed_default_guardrails()
         store = Store(CONSOLE_DB_PATH)
         bus = EventBus(store)
         app.state.store = store
         set_bus(bus)
         drain = asyncio.create_task(bus.run())
-        try:
-            yield
-        finally:
-            drain.cancel()
-            set_bus(None)
-            store.close()
+        api_key = os.getenv("TYPESAFE_API_KEY", "").strip() or None
+        model = os.getenv("TYPESAFE_DEFAULT_MODEL", "").strip() or DEFAULT_MODEL
+        subscription = subscribe() if api_key else nullcontext(None)
+        with subscription as queue:
+            scorer = (
+                asyncio.create_task(
+                    run_scoring_worker(store, queue, api_key, model)
+                )
+                if queue is not None and api_key is not None
+                else None
+            )
+            try:
+                yield
+            finally:
+                for task in (scorer, drain):
+                    if task is not None:
+                        task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await task
+                set_bus(None)
+                store.close()
+                await guardrail_database.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.state.active_workers = {}
 
     # For the Vite dev server only. This has nothing to do with
     # FastAPIWebsocketParams(allowed_origins=[]), which guards the Twilio
@@ -114,7 +138,12 @@ def create_app(
         # One pipeline per socket. A Run All opens ten at once and problem 2
         # opens twenty; nothing may be shared between them.
         try:
-            await run_call(websocket, build_agent, initial_greeting=initial_greeting)
+            await run_call(
+                websocket,
+                build_agent,
+                initial_greeting=initial_greeting,
+                active_workers=app.state.active_workers,
+            )
         except Exception:  # noqa: BLE001 - never let one call escape into the server
             logger.exception("unhandled error serving call")
 

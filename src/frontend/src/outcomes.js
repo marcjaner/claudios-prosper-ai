@@ -1,21 +1,61 @@
-// The six verbs a call can end in. Colours are categorical identity, not
-// status: a refusal with the right reason scores exactly like a booking, so
-// painting NO_ACTION red would lie about what the agent did.
+// A call either changed the clinic's diary, closed with a reasoned record, or
+// left nothing behind. Only the last always fails the case: NO_ACTION with the
+// right reason scores exactly like a booking, and problems 6 and 14 require it.
+// So colour carries the group and the verb is always spelled out in text.
 // Validated as a set against the card surface (#0f172a) in dark mode.
-export const OUTCOMES = {
-  BOOK: { label: "Reserva", color: "#3987e5" },
-  RESCHEDULE: { label: "Cambio", color: "#d95926" },
-  CANCEL: { label: "Cancelación", color: "#199e70" },
-  REGISTER: { label: "Alta", color: "#c98500" },
-  NO_ACTION: { label: "Sin acción", color: "#d55181" },
-  ESCALATE: { label: "Escalada", color: "#9085e9" },
+export const GROUPS = {
+  wrote: { label: "Schedule updated", color: "#199e70" },
+  closed: { label: "Closed without changes", color: "#9085e9" },
+  absent: { label: "No record", color: "#e66767" },
 };
 
-// An absence of outcome is not an identity, so it takes recessive ink.
-export const UNRECORDED = { label: "Sin registrar", color: "#475569" };
+export const OUTCOMES = {
+  BOOK: { label: "Booked", group: "wrote", chartColor: "#199e70" },
+  RESCHEDULE: { label: "Rescheduled", group: "wrote", chartColor: "#3979c3" },
+  CANCEL: { label: "Cancelled", group: "wrote", chartColor: "#d28434" },
+  REGISTER: { label: "Registered", group: "wrote", chartColor: "#30a4ad" },
+  NO_ACTION: { label: "No action", group: "closed", chartColor: "#94a3b8" },
+  ESCALATE: { label: "Escalated", group: "closed", chartColor: "#9085e9" },
+};
+
+export const HISTORY_RANGES = [
+  { value: "15m", label: "Last 15 minutes", minutes: 15 },
+  { value: "1h", label: "Last hour", minutes: 60 },
+  { value: "3h", label: "Last 3 hours", minutes: 180 },
+  { value: "6h", label: "Last 6 hours", minutes: 360 },
+  { value: "12h", label: "Last 12 hours", minutes: 720 },
+  { value: "24h", label: "Last 24 hours", minutes: 1440 },
+  { value: "7", label: "Last 7 days" },
+  { value: "14", label: "Last 14 days" },
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+  { value: "all", label: "All time" },
+  { value: "custom", label: "Custom dates" },
+];
+
+export function historyDateRange(range, now = new Date()) {
+  const empty = { date_from: "", date_to: "", started_after: "", started_before: "" };
+  if (range === "all" || range === "custom") return empty;
+  const minutes = HISTORY_RANGES.find(({ value }) => value === range)?.minutes;
+  if (minutes) {
+    const end = now.getTime() / 1000;
+    return { ...empty, started_after: end - minutes * 60, started_before: end };
+  }
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(now).map(({ type, value }) => [type, value]),
+  );
+  const date_to = `${parts.year}-${parts.month}-${parts.day}`;
+  const start = new Date(`${date_to}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - Number(range) + 1);
+  return { ...empty, date_from: start.toISOString().slice(0, 10), date_to };
+}
 
 export function outcomeStyle(outcome) {
-  return OUTCOMES[outcome] ?? UNRECORDED;
+  const entry = OUTCOMES[outcome];
+  if (!entry) return { label: "No record", color: GROUPS.absent.color };
+  return { label: entry.label, color: GROUPS[entry.group].color };
 }
 
 // The platform's closed vocabulary. The first eleven mirror the clinic's own

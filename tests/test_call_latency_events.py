@@ -9,6 +9,7 @@ from pipecat.processors.frame_processor import FrameDirection
 import agent.reply as reply_module
 from agent.agent import run_agent_turn
 from agent.clinic_api import ClinicApi
+from agent.language import DEFAULT_LANGUAGE, phrases
 from agent.llm import (
     LLMClient,
     LLMToolCall,
@@ -34,6 +35,7 @@ class FakeRepository:
     def __init__(self):
         self.events = []
         self.submissions = []
+        self.workflow = {}
 
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
@@ -41,8 +43,20 @@ class FakeRepository:
     async def memory_for_call(self, call_id):
         return ""
 
+    async def workflow_for_call(self, call_id):
+        return {}
+
+    async def save_workflow(self, call_id, state):
+        self.workflow = state
+
     async def record_submission(self, *arguments):
         self.submissions.append(arguments)
+
+    async def seed_default_guardrails(self):
+        pass
+
+    async def list_guardrails(self):
+        return []
 
 
 class FakeClinicApi:
@@ -196,7 +210,7 @@ def test_tool_turn_observes_initial_and_follow_up_llm_requests(monkeypatch):
     assert frames[4].request_id == frames[5].request_id
     assert frames[0].request_id != frames[4].request_id
     assert [response.immediate_answer for response in replies] == [
-        "Let me check that for you.",
+        phrases(DEFAULT_LANGUAGE).acknowledgement,
         "I found your record.",
     ]
 
@@ -312,7 +326,8 @@ def test_llm_failure_emits_safe_failure_event(monkeypatch):
     assert clinic_api.is_closed is True
 
 
-def test_tool_failure_emits_error_before_preserving_main_failure_behavior(monkeypatch):
+def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch):
+    """A clinic outage becomes feedback the agent can voice, not a silent dead turn."""
     clinic_api = FakeClinicApi(RuntimeError("secret clinic details"))
     monkeypatch.setattr(
         ClinicApi, "from_environment", classmethod(lambda cls: clinic_api)
@@ -325,30 +340,32 @@ def test_tool_failure_emits_error_before_preserving_main_failure_behavior(monkey
         async def emit(frame):
             frames.append(frame)
 
-        with pytest.raises(RuntimeError, match="secret clinic details"):
-            async for response in run_agent_turn(
-                "Hello",
-                "CA456",
-                cast(CallRepository, FakeRepository()),
-                cast(
-                    LLMClient,
-                    FakeLLMClient(
-                        [
-                            AgentResponse(
-                                immediate_answer="Let me check.",
-                                tool_calls=[
-                                    ToolCall(
-                                        name="search_patients",
-                                        arguments={"name": "Ana"},
-                                    )
-                                ],
-                            )
-                        ]
-                    ),
+        async for response in run_agent_turn(
+            "Hello",
+            "CA456",
+            cast(CallRepository, FakeRepository()),
+            cast(
+                LLMClient,
+                FakeLLMClient(
+                    [
+                        AgentResponse(
+                            immediate_answer="Let me check.",
+                            tool_calls=[
+                                ToolCall(
+                                    name="search_patients",
+                                    arguments={"name": "Ana"},
+                                )
+                            ],
+                        ),
+                        AgentResponse(
+                            immediate_answer="Sorry, I could not look that up."
+                        ),
+                    ]
                 ),
-                event_sink=emit,
-            ):
-                replies.append(response)
+            ),
+            event_sink=emit,
+        ):
+            replies.append(response)
         return frames, replies
 
     frames, replies = asyncio.run(run())
@@ -359,7 +376,11 @@ def test_tool_failure_emits_error_before_preserving_main_failure_behavior(monkey
     assert finished.status == "error"
     assert finished.error_type == "RuntimeError"
     assert finished.error_message == "Tool execution failed"
-    assert [response.immediate_answer for response in replies] == ["Let me check."]
+    assert "secret" not in finished.error_message
+    assert [response.immediate_answer for response in replies] == [
+        "Let me check.",
+        "Sorry, I could not look that up.",
+    ]
     assert clinic_api.is_closed is True
 
 
@@ -371,7 +392,7 @@ def test_tool_arguments_exclude_credentials_headers_and_hidden_call_id(monkeypat
                 immediate_answer="Let me check.",
                 tool_calls=[
                     ToolCall(
-                        name="unknown_tool",
+                        name="search_patients",
                         arguments={
                             "name": "Ana",
                             "api_key": "secret",
@@ -384,7 +405,7 @@ def test_tool_arguments_exclude_credentials_headers_and_hidden_call_id(monkeypat
                     )
                 ],
             ),
-            AgentResponse(immediate_answer="I could not find that tool."),
+            AgentResponse(immediate_answer="Nobody by that name."),
         ],
     )
 

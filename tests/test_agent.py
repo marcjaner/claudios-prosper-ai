@@ -4,7 +4,7 @@ from threading import Event
 from typing import cast
 
 from agent import agent
-from agent.call_context import CallContext
+from agent.graph import parse_graph
 from agent.llm import (
     LLMClient,
     LLMToolCall,
@@ -13,6 +13,7 @@ from agent.llm import (
     Usage,
 )
 from agent.models import AgentResponse, Tool
+from agent.stage_runtime import CallGraph
 from storage import CallRepository
 
 
@@ -28,11 +29,20 @@ class FakeRepository:
     async def memory_for_call(self, _call_id):
         return ""
 
+    async def workflow_for_call(self, _call_id):
+        return {}
+
     async def record_submission(self, *_args):
         self.submissions.append(_args)
 
     async def save_workflow(self, _call_id, workflow):
         self.workflow = workflow
+
+    async def seed_default_guardrails(self):
+        pass
+
+    async def list_guardrails(self):
+        return []
 
 
 class FakeClinicApi:
@@ -221,6 +231,11 @@ def test_context_survives_agent_turns_and_records_only_confirmed_payload(monkeyp
                         usage=Usage(),
                     ),
                     ToolCompletion(
+                        text="¿Confirma esta cita?",
+                        tool_calls=[],
+                        usage=Usage(),
+                    ),
+                    ToolCompletion(
                         text="Confirmo la cita",
                         tool_calls=[
                             LLMToolCall(
@@ -250,7 +265,24 @@ def test_context_survives_agent_turns_and_records_only_confirmed_payload(monkeyp
 
     api = SchedulingApi()
     repository = FakeRepository()
-    context = CallContext("CA123")
+    graph = parse_graph(
+        {
+            "entry": "schedule",
+            "nodes": [
+                {
+                    "id": "schedule",
+                    "tools": [
+                        "search_patients",
+                        "search_availability",
+                        "prepare_booking",
+                        "confirm_action",
+                    ],
+                }
+            ],
+        }
+    )
+    state = CallGraph.start(graph, call_id="CA123")
+    context = state.context
     client = ScriptedClient()
     monkeypatch.setattr(agent.ClinicApi, "from_environment", lambda: api)
 
@@ -261,8 +293,15 @@ def test_context_survives_agent_turns_and_records_only_confirmed_payload(monkeyp
                 "CA123",
                 cast(CallRepository, repository),
                 cast(LLMClient, client),
-                context=context,
+                state=state,
             )
+        )
+        assert state.facts["proposal_id"] == "prop_1"
+        assert repository.workflow is not None
+        assert repository.workflow["stage"] == "schedule"
+        assert (
+            repository.workflow["request_context"]["proposals"][0]["status"]
+            == "prepared"
         )
         await collect_responses(
             agent.run_agent_turn(
@@ -270,7 +309,7 @@ def test_context_survives_agent_turns_and_records_only_confirmed_payload(monkeyp
                 "CA123",
                 cast(CallRepository, repository),
                 cast(LLMClient, client),
-                context=context,
+                state=state,
             )
         )
 
@@ -289,6 +328,7 @@ def test_context_survives_agent_turns_and_records_only_confirmed_payload(monkeyp
         "policy_id": "sanitas",
     }
     assert context.turn_number == 2
+    assert "proposal_id" not in state.facts
     assert api.posts == [expected_payload]
     assert repository.submissions == [
         (

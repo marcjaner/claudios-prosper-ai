@@ -347,4 +347,4 @@ class LLMClient:
 @lru_cache(maxsize=1)
 def get_llm_client() -> LLMClient:
     """Return the shared default client for the process."""
-    return LLMClient()
+    return LLMClient(os.getenv("HELMCODE_MODEL", DEFAULT_MODEL))

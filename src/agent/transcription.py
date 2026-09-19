@@ -1,15 +1,19 @@
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import Frame, InterimTranscriptionFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from observability import emit, update_call
 from storage import CallRepository, Database
 from stt import (
     DeepgramEndpointingStopStrategy,
@@ -19,18 +23,33 @@ from stt import (
 from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
-from .call_context import CallContext
+from .language import DEFAULT_LANGUAGE, CallLanguage, LanguageTracker, phrases
 from .reply import AgentReply
+from .stage_runtime import CallGraph
 
 logger = logging.getLogger(__name__)
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 USER_TURN_STOP_TIMEOUT_SECONDS = 6
-INITIAL_GREETING = "Clínica Arenal, ¿en qué puedo ayudarle?"
+# The greeting plays before the caller has said a word, so it is always the default.
+INITIAL_GREETING = phrases(DEFAULT_LANGUAGE).greeting
 
 
 async def log_completed_turn(meta: CallMeta, content: str) -> None:
     logger.info("completed user turn | call_id=%s text=%s", meta.call_id, content)
+
+
+class TranscriptObserver(FrameProcessor):
+    def __init__(self, meta: CallMeta):
+        super().__init__()
+        self._meta = meta
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, InterimTranscriptionFrame):
+            emit(self._meta.call_id, "stt_partial", {"text": frame.text})
+            update_call(self._meta.call_id, state="listening")
+        await self.push_frame(frame, direction)
 
 
 def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
@@ -50,6 +69,8 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
             "user turn stopped | call_id=%s content=%r", meta.call_id, message.content
         )
         if message.content:
+            emit(meta.call_id, "stt_final", {"text": message.content})
+            update_call(meta.call_id, state="thinking")
             await on_completed_turn(meta, message.content)
 
     return aggregator
@@ -57,20 +78,44 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
 
 def create_transcription_agent(
     on_completed_turn: CompletedTurnCallback = log_completed_turn,
+    database: Database | None = None,
 ) -> AgentFactory:
+    database = database or Database()
+    repository = CallRepository(database)
+    database_init_lock = asyncio.Lock()
+    is_database_initialized = False
+
     async def build_agent(meta: CallMeta):
+        nonlocal is_database_initialized
         logger.info("building call pipeline | call_id=%s", meta.call_id)
-        database = Database()
-        await database.init()
-        repository = CallRepository(database)
+        if not is_database_initialized:
+            async with database_init_lock:
+                if not is_database_initialized:
+                    await database.init()
+                    is_database_initialized = True
+        await repository.seed_default_guardrails()
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
-        context = CallContext(meta.call_id)
+        state = CallGraph.start(call_id=meta.call_id)
+        language = CallLanguage()
+        emit(
+            meta.call_id,
+            "stage_entered",
+            {
+                "turn": 0,
+                "step": 0,
+                "stage": state.stage_id,
+                "from": None,
+                "cleared": [],
+            },
+        )
         processors = [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
+            TranscriptObserver(meta),
+            LanguageTracker(meta.call_id, language),
             create_user_aggregator(meta, on_completed_turn),
-            AgentReply(meta.call_id, repository, context),
+            AgentReply(meta.call_id, repository, state, language),
             create_tts(),
         ]
         logger.info(
