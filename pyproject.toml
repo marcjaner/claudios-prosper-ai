@@ -9,10 +9,15 @@ authors = [
     {name = "ferjorosa"}
 ]
 dependencies = [
+    "aiosqlite>=0.22.1",
+    "greenlet>=3.5.6",
     "openai>=2.30.0",
+    "pipecat-ai[cartesia,deepgram,openai,silero,websocket]>=1.11.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
+    "sqlalchemy>=2.0.54",
+    "uvicorn[standard]>=0.53.0",
 ]
 
 [project.scripts]
@@ -32,10 +37,13 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["agent*", "frontend*", "stt*", "twilio*", "tts*"]
-
-[tool.setuptools.package-dir]
-"" = "src"
 
 [tool.setuptools.package-data]
-agent = ["prompts.yaml"]
+claudios_prosper_ai = ["prompts/*.yaml"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "scripts"]
+testpaths = ["tests"]
+
+[tool.ty.environment]
+extra-paths = ["scripts"]
