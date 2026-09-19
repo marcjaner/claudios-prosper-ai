@@ -32,6 +32,15 @@ from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.frame_processor import FrameDirection
 
+from observability.frames import (
+    LLMRequestFailedFrame,
+    LLMRequestStartedFrame,
+    LLMResponseFinishedFrame,
+    ToolCallFinishedFrame,
+    ToolCallStartedFrame,
+    TTSRequestedFrame,
+)
+
 from .handshake import CallMeta
 
 RECORDINGS_DIR_VAR = "CALL_RECORDINGS_DIR"
@@ -138,6 +147,53 @@ class CallTimelineObserver(BaseObserver):
             return {"event": "playback_interrupted"}
         if isinstance(frame, TTSSpeakFrame):
             return {"event": "agent_text", "text": frame.text}
+        if isinstance(frame, TTSRequestedFrame):
+            return {"event": "tts_requested", "text": frame.text}
+        if isinstance(frame, LLMRequestStartedFrame):
+            return {
+                "event": "llm_request_started",
+                "request_id": frame.request_id,
+                "model": frame.model,
+            }
+        if isinstance(frame, LLMResponseFinishedFrame):
+            return {
+                "event": "llm_response_finished",
+                "request_id": frame.request_id,
+                "model": frame.model,
+                "duration_ms": frame.duration_ms,
+                "prompt_tokens": frame.prompt_tokens,
+                "completion_tokens": frame.completion_tokens,
+                "total_tokens": frame.total_tokens,
+                "reasoning_tokens": frame.reasoning_tokens,
+                "cached_tokens": frame.cached_tokens,
+            }
+        if isinstance(frame, LLMRequestFailedFrame):
+            return {
+                "event": "llm_request_failed",
+                "request_id": frame.request_id,
+                "model": frame.model,
+                "duration_ms": frame.duration_ms,
+                "error_type": frame.error_type,
+                "error_message": frame.error_message,
+            }
+        if isinstance(frame, ToolCallStartedFrame):
+            return {
+                "event": "tool_call_started",
+                "tool": frame.tool,
+                "tool_call_id": frame.tool_call_id,
+                "arguments": frame.arguments,
+            }
+        if isinstance(frame, ToolCallFinishedFrame):
+            return {
+                "event": "tool_call_finished",
+                "tool": frame.tool,
+                "tool_call_id": frame.tool_call_id,
+                "duration_ms": frame.duration_ms,
+                "status": frame.status,
+                "result_summary": frame.result_summary,
+                "error_type": frame.error_type,
+                "error_message": frame.error_message,
+            }
         if isinstance(frame, LLMTextFrame):
             return {"event": "agent_text_delta", "text": frame.text}
         if isinstance(frame, FunctionCallInProgressFrame):
