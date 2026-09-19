@@ -38,9 +38,21 @@ telemetry, recording, and GPT-Live settings.
 ./run.sh
 ```
 
-The server exposes the voice endpoint at `ws://localhost:7860/ws`, health at
-`http://localhost:7860/healthz`, and the clinic console at
-`http://localhost:7860/app/`. Set `PORT` to use another port.
+Virtual Agents is the default runtime. To fall back to the existing Python
+agent while keeping the same port, dashboard, ngrok tunnel, and Prosper
+integration:
+
+```shell
+AGENT_RUNTIME=python ./run.sh
+```
+
+Stop the current runtime before switching. Set `AGENT_RUNTIME=virtual-agents`
+explicitly to switch back, or omit it to use the default.
+
+Both runtimes expose the voice endpoint at `ws://localhost:7860/ws` and the
+clinic console at `http://localhost:7860/app/`. Virtual Agents exposes health
+at `http://localhost:7860/healthz`; the Python agent uses
+`http://localhost:7860/health`. Set `PORT` to use another port.
 
 For the public challenge endpoint, expose the same port and configure
 `wss://<host>/ws` in Prosper. No authorization header is currently required.
