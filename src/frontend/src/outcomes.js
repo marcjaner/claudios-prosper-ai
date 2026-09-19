@@ -4,23 +4,57 @@
 // So colour carries the group and the verb is always spelled out in text.
 // Validated as a set against the card surface (#0f172a) in dark mode.
 export const GROUPS = {
-  wrote: { label: "Acción sobre la agenda", color: "#199e70" },
-  closed: { label: "Cerrada sin escribir", color: "#9085e9" },
-  absent: { label: "Sin registro", color: "#e66767" },
+  wrote: { label: "Schedule updated", color: "#199e70" },
+  closed: { label: "Closed without changes", color: "#9085e9" },
+  absent: { label: "No record", color: "#e66767" },
 };
 
 export const OUTCOMES = {
-  BOOK: { label: "Reserva", group: "wrote" },
-  RESCHEDULE: { label: "Cambio", group: "wrote" },
-  CANCEL: { label: "Cancelación", group: "wrote" },
-  REGISTER: { label: "Alta", group: "wrote" },
-  NO_ACTION: { label: "Sin acción", group: "closed" },
-  ESCALATE: { label: "Escalada", group: "closed" },
+  BOOK: { label: "Booked", group: "wrote", chartColor: "#199e70" },
+  RESCHEDULE: { label: "Rescheduled", group: "wrote", chartColor: "#3979c3" },
+  CANCEL: { label: "Cancelled", group: "wrote", chartColor: "#d28434" },
+  REGISTER: { label: "Registered", group: "wrote", chartColor: "#30a4ad" },
+  NO_ACTION: { label: "No action", group: "closed", chartColor: "#94a3b8" },
+  ESCALATE: { label: "Escalated", group: "closed", chartColor: "#9085e9" },
 };
+
+export const HISTORY_RANGES = [
+  { value: "15m", label: "Last 15 minutes", minutes: 15 },
+  { value: "1h", label: "Last hour", minutes: 60 },
+  { value: "3h", label: "Last 3 hours", minutes: 180 },
+  { value: "6h", label: "Last 6 hours", minutes: 360 },
+  { value: "12h", label: "Last 12 hours", minutes: 720 },
+  { value: "24h", label: "Last 24 hours", minutes: 1440 },
+  { value: "7", label: "Last 7 days" },
+  { value: "14", label: "Last 14 days" },
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+  { value: "all", label: "All time" },
+  { value: "custom", label: "Custom dates" },
+];
+
+export function historyDateRange(range, now = new Date()) {
+  const empty = { date_from: "", date_to: "", started_after: "", started_before: "" };
+  if (range === "all" || range === "custom") return empty;
+  const minutes = HISTORY_RANGES.find(({ value }) => value === range)?.minutes;
+  if (minutes) {
+    const end = now.getTime() / 1000;
+    return { ...empty, started_after: end - minutes * 60, started_before: end };
+  }
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(now).map(({ type, value }) => [type, value]),
+  );
+  const date_to = `${parts.year}-${parts.month}-${parts.day}`;
+  const start = new Date(`${date_to}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - Number(range) + 1);
+  return { ...empty, date_from: start.toISOString().slice(0, 10), date_to };
+}
 
 export function outcomeStyle(outcome) {
   const entry = OUTCOMES[outcome];
-  if (!entry) return { label: "Sin registro", color: GROUPS.absent.color };
+  if (!entry) return { label: "No record", color: GROUPS.absent.color };
   return { label: entry.label, color: GROUPS[entry.group].color };
 }
 

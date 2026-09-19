@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 
+import AgentActions from "./AgentActionGraph.jsx";
+import StageTrace from "./StageTrace.jsx";
 import Transcript from "./Transcript.jsx";
+import { getActionReason } from "./agentGraph.js";
 import { outcomeStyle } from "./outcomes.js";
 
-const timeFormat = new Intl.DateTimeFormat("es-ES", {
+const timeFormat = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "short",
   timeStyle: "medium",
   timeZone: "Europe/Madrid",
@@ -11,135 +14,44 @@ const timeFormat = new Intl.DateTimeFormat("es-ES", {
 
 function Field({ label, children }) {
   return (
-    <div className="border-t border-slate-800/70 py-2 first:border-0">
-      <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className="mt-0.5 text-sm text-slate-200">{children ?? <span className="text-slate-600">—</span>}</dd>
+    <div className="min-w-0">
+      <dt className="text-xs text-slate-400">{label}</dt>
+      <dd className="mt-1 break-words text-[13px] font-semibold tabular-nums text-slate-800">
+        {children ?? <span className="font-normal text-slate-400">Not available</span>}
+      </dd>
     </div>
   );
 }
 
-const PENALTY_REASONS = {
-  no_action: "sin acción registrada",
-  early_hangup: "cuelgue antes de 30 s",
-  guardrail_breach: "guardrail incumplido",
-};
-
-const SCORE_DIMENSIONS = [
-  ["resolution", "Resolución"],
-  ["conversation", "Conversación"],
-  ["personalization", "Personalización"],
-  ["safety", "Seguridad"],
-  ["language", "Idioma y accesibilidad"],
-];
-
-function parseScore(raw) {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function Scoring({ call }) {
-  const score = parseScore(call.score_json);
-  if (!score) {
-    return (
-      <div className="rounded-xl border border-rose-900/60 bg-rose-950/40 p-4">
-        <h3 className="mb-1 text-xs uppercase tracking-wide text-rose-300/80">
-          Puntuación
-        </h3>
-        <p className="text-xs text-rose-300">{call.score_error ?? "puntuación no disponible"}</p>
-      </div>
-    );
-  }
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="font-mono text-3xl tabular-nums text-slate-100">
-          {Math.round(score.overall)}
-        </span>
-        <span className="text-sm text-slate-500">/100</span>
-        <span className="text-xs text-slate-500">
-          calidad observable en la transcripción
-        </span>
-        <span className="font-mono text-xs text-slate-500">
-          {score.final === false
-            ? `en directo · ${score.turn_count ?? 0} ${
-                (score.turn_count ?? 0) === 1 ? "respuesta" : "respuestas"
-              }`
-            : "final"}
-        </span>
-        <span className="ml-auto font-mono text-xs text-slate-600">
-          {score.model}
-          {score.scored_at != null &&
-            ` · ${timeFormat.format(new Date(score.scored_at * 1000))}`}
-        </span>
-      </div>
-      {score.penalty?.points > 0 && (
-        <p className="mt-3 rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
-          Penalización −{score.penalty.points} puntos
-          <span className="text-amber-400/80">
-            {" · "}
-            {score.penalty.reasons
-              ?.map((reason) => PENALTY_REASONS[reason] ?? reason)
-              .join(", ")}
-          </span>
-          <span className="ml-2 font-mono text-amber-400/70">
-            Jev: {score.raw_overall}
-          </span>
-        </p>
-      )}
-      <div className="mt-3 space-y-2">
-        {SCORE_DIMENSIONS.map(([key, label]) => {
-          const dimension = score.dimensions?.[key];
-          if (!dimension || typeof dimension.score !== "number") return null;
-          const percent = (dimension.score / 4) * 100;
-          return (
-            <div key={key} className="flex items-center gap-3">
-              <span className="w-40 shrink-0 text-xs text-slate-400">{label}</span>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
-                <div
-                  className="h-full rounded-full bg-emerald-500"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-              <span className="w-10 text-right font-mono text-xs tabular-nums text-slate-300">
-                {Math.round(percent)}
-              </span>
-              <span className="w-20 text-right font-mono text-xs tabular-nums text-slate-600">
-                {typeof dimension.confidence === "number"
-                  ? `conf. ${Math.round(dimension.confidence * 100)}%`
-                  : ""}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+function formatDuration(call) {
+  if (!call.ended_at) return "In progress";
+  const seconds = Math.max(0, Math.round(call.ended_at - call.started_at));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function Submission({ event }) {
   const failed = event.payload.status >= 400;
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
-      <p className="flex items-center gap-2 font-mono text-xs">
-        <span className="text-slate-400">{event.payload.route}</span>
-        <span className={`ml-auto ${failed ? "text-rose-400" : "text-emerald-400"}`}>
-          {event.payload.status}
-        </span>
-      </p>
-      <pre className="mt-2 overflow-x-auto font-mono text-xs leading-relaxed text-slate-400">
+    <details className="clinic-panel px-5 py-4">
+      <summary className="cursor-pointer rounded text-sm font-semibold text-slate-700 focus-visible:outline-2 focus-visible:outline-emerald-500">
+        Submitted record
+        <span className={`ml-3 text-xs ${failed ? "text-rose-600" : "text-emerald-700"}`}>{event.payload.status}</span>
+      </summary>
+      <p className="mt-3 break-all font-mono text-xs text-slate-500">{event.payload.route}</p>
+      <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 p-4 font-mono text-xs leading-relaxed text-slate-200">
         {JSON.stringify(event.payload.request ?? {}, null, 2)}
       </pre>
-    </div>
+    </details>
   );
 }
 
-export default function CallDetail({ callId, liveCall, liveEvents }) {
+export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   const [stored, setStored] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [callId]);
 
   // The store holds everything committed so far; the socket carries whatever
   // has happened since. A call opened mid-flight needs both.
@@ -165,97 +77,95 @@ export default function CallDetail({ callId, liveCall, liveEvents }) {
   ].sort((a, b) => a.ts - b.ts);
 
   const submission = events.find((event) => event.kind === "submit");
-  let violations = [];
-  try { violations = JSON.parse(call.guardrail_violations || "[]"); } catch { /* ignore malformed legacy data */ }
+  const hasStageTrace = events.some(({ kind }) =>
+    ["stage_entered", "fact_recorded", "tool_rejected", "transition_rejected", "turn_finished"].includes(kind),
+  );
   const style = call.outcome ? outcomeStyle(call.outcome) : null;
 
   if (loading && !liveCall) {
-    return <p className="p-6 text-slate-600">Cargando…</p>;
+    return <p className="clinic-page text-slate-500">Loading call…</p>;
   }
   if (!call.started_at) {
-    return <p className="p-6 text-slate-600">No hay ninguna llamada con ese identificador.</p>;
+    return <p className="clinic-page text-slate-500">No call exists with that identifier.</p>;
   }
 
   return (
-    <main className="p-6">
-      <a href="#/wall" className="text-sm text-slate-500 hover:text-slate-300">
-        ← volver
-      </a>
-
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <h2 className="font-mono text-sm text-slate-400">{callId}</h2>
-        {live && (
-          <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-            en curso
+    <main className="clinic-page space-y-5">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <a href={returnTo} className="rounded text-sm font-medium text-emerald-700 transition-colors hover:text-emerald-900 focus-visible:outline-2 focus-visible:outline-emerald-500">
+            ← Back
+          </a>
+          <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="text-3xl font-semibold tracking-[-0.04em] text-slate-950">Conversation detail</h1>
+            <span className="break-all text-[11px] text-slate-400">{callId}</span>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${live ? "bg-emerald-100 text-emerald-800" : "bg-slate-200/70 text-slate-600"}`}>
+            {live ? "In progress" : "Completed"}
           </span>
-        )}
-        {style && (
-          <span className="flex items-center gap-1.5 text-sm">
-            <span style={{ backgroundColor: style.color }} className="h-2 w-2 rounded-full" />
-            <span className="text-slate-200">{style.label}</span>
-            {call.reason && <span className="font-mono text-xs text-slate-500">{call.reason}</span>}
+          {style && (
+            <span className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">
+              <span style={{ backgroundColor: style.color }} className="h-1.5 w-1.5 rounded-full" />
+              {style.label}
+            </span>
+          )}
+          {call.reason && <span className="max-w-sm text-xs leading-relaxed text-slate-500">{getActionReason(call.reason)}</span>}
+          {call.guardrail_breached && <span className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800">Safety rule breached</span>}
+        </div>
+      </header>
+
+      <aside aria-label="Patient information" className="clinic-panel min-w-0 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-slate-400">Patient</p>
+            <h2 className="mt-0.5 break-words text-xl font-semibold tracking-tight text-slate-950">
+              {call.patient_name ?? "Unidentified caller"}
+            </h2>
+          </div>
+          <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
+            {call.insurer ?? "Insurer unknown"}
           </span>
-        )}
-      </div>
+        </div>
+        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
+          <Field label="Patient ID">{call.patient_id}</Field>
+          <Field label="Caller">{call.from_number ?? "Hidden"}</Field>
+          <Field label="Started">{timeFormat.format(new Date(call.started_at * 1000))}</Field>
+          <Field label="Duration">{formatDuration(call)}</Field>
+          <Field label="First response">{call.ttfa_seconds != null ? `${call.ttfa_seconds.toFixed(2)} s` : null}</Field>
+          <Field label="Cost">{call.cost_eur != null ? `${call.cost_eur.toFixed(4)} €` : null}</Field>
+        </dl>
+        {call.error && <p className="mt-3 break-words rounded-xl bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">{call.error}</p>}
+      </aside>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_1fr]">
-        <aside className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Paciente</h3>
-          <dl>
-            <Field label="Nombre">{call.patient_name}</Field>
-            <Field label="Ficha">{call.patient_id}</Field>
-            <Field label="Seguro">
-              {call.insurer && (
-                <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs">
-                  {call.insurer}
-                </span>
-              )}
-            </Field>
-            <Field label="Llamante">{call.from_number ?? "oculto"}</Field>
-            <Field label="Inicio">
-              {call.started_at && timeFormat.format(new Date(call.started_at * 1000))}
-            </Field>
-            <Field label="Primera voz">
-              {call.ttfa_seconds != null && `${call.ttfa_seconds.toFixed(2)} s`}
-            </Field>
-            <Field label="Coste">
-              {call.cost_eur != null && `${call.cost_eur.toFixed(4)} €`}
-            </Field>
-          </dl>
-        {call.error && (
-            <p className="mt-3 rounded border border-rose-900/60 bg-rose-950/40 p-2 text-xs text-rose-300">
-              {call.error}
-            </p>
-          )}
-          {call.guardrail_breached && (
-            <p className="mt-3 rounded border border-amber-900/60 bg-amber-950/40 p-2 text-xs text-amber-300">
-              ⚠ Safety rule breached: the request was refused.
-              {violations.length > 0 && (
-                <ul className="mt-1 list-disc pl-4">{violations.map((item) => <li key={item.guardrail}>{item.guardrail} ({Math.round(item.probability * 100)}%)</li>)}</ul>
-              )}
-            </p>
-          )}
-        </aside>
-
-        <section className="space-y-4">
-          {(call.score_json || call.score_error) && <Scoring call={call} />}
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <h3 className="mb-3 text-xs uppercase tracking-wide text-slate-500">
-              Transcripción y traza
-            </h3>
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <AgentActions key={callId} events={events} startedAt={call.started_at} live={live} />
+        <section aria-label="Conversation transcript" className="call-panel">
+          <div className="call-panel-header">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Conversation</h3>
+              <p className="mt-1 text-xs text-slate-400">Transcript and assistant activity</p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">{live ? "Live" : "Record"}</span>
+          </div>
+          <div className="min-h-0 flex-1 p-4">
             <Transcript events={events} startedAt={call.started_at} live={live} />
           </div>
-          {submission && (
-            <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">
-                Lo que se envió
-              </h3>
-              <Submission event={submission} />
-            </div>
-          )}
         </section>
       </div>
+
+      {hasStageTrace && (
+        <details className="clinic-panel px-5 py-4">
+          <summary className="cursor-pointer rounded text-sm font-semibold text-slate-700 focus-visible:outline-2 focus-visible:outline-emerald-500">
+            Technical journey details
+          </summary>
+          <div className="mt-3">
+            <StageTrace events={events} startedAt={call.started_at} />
+          </div>
+        </details>
+      )}
+      {submission && <Submission event={submission} />}
     </main>
   );
 }

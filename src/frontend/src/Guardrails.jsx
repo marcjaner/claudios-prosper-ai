@@ -33,7 +33,7 @@ export default function Guardrails() {
   }, []);
 
   async function sync(next) {
-      setGuardrails(next);
+    setGuardrails(next);
     setSaved(false);
     setError("");
     clearTimeout(syncTimer.current);
@@ -53,21 +53,21 @@ export default function Guardrails() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-10">
-      <div className="mb-8 flex items-end justify-between gap-4">
+    <main className="clinic-page max-w-4xl">
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="mb-2 text-xs uppercase tracking-[0.2em] text-emerald-400">Configuration</p>
-          <h2 className="text-3xl font-semibold text-slate-100">Safety rules</h2>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Configuration</p>
+          <h2 className="text-3xl font-semibold tracking-[-0.04em] text-slate-950">Safety rules</h2>
           <p className="mt-2 text-sm text-slate-500">Rules the receptionist must follow on every call.</p>
         </div>
-        <span className={`text-xs ${saved ? "text-emerald-400" : "text-amber-400"}`}>
+        <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${saved ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
           {saved ? "Synced" : "Saving…"}
         </span>
       </div>
       <div className="space-y-3">
         {guardrails.map((rule, index) => (
-          <div key={index} className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-            <span className="mt-3 w-6 text-center font-mono text-xs text-slate-600">{index + 1}</span>
+          <div key={index} className="clinic-panel flex items-start gap-3 p-4 sm:p-5">
+            <span className="mt-3 w-6 text-center font-mono text-xs tabular-nums text-slate-400">{String(index + 1).padStart(2, "0")}</span>
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <textarea
                 value={rule.title}
@@ -80,7 +80,7 @@ export default function Guardrails() {
                 rows={1}
                 placeholder="Title"
                 aria-label="Safety rule title"
-                className="min-h-12 resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-medium text-slate-200 outline-none focus:border-emerald-500"
+                className="clinic-control min-h-12 w-full resize-y font-medium"
               />
               <textarea
                 value={rule.description}
@@ -88,15 +88,15 @@ export default function Guardrails() {
                 rows={2}
                 placeholder="Description"
                 aria-label="Safety rule description"
-                className="min-h-12 resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-emerald-500"
+                className="clinic-control min-h-16 w-full resize-y"
               />
             </div>
-            <button onClick={() => sync(guardrails.filter((_, item) => item !== index))} className="mt-2 px-2 text-slate-500 hover:text-rose-400" aria-label="Delete rule">×</button>
+            <button type="button" onClick={() => sync(guardrails.filter((_, item) => item !== index))} className="mt-1 rounded-lg px-2 py-1 text-xl leading-none text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-2 focus-visible:outline-rose-400" aria-label="Delete rule">×</button>
           </div>
         ))}
       </div>
-      <button onClick={() => sync([...guardrails, { title: "", description: "" }])} className="mt-5 rounded-lg border border-dashed border-slate-700 px-4 py-2 text-sm text-slate-400 hover:border-emerald-500 hover:text-emerald-400">+ Add safety rule</button>
-      {error && <p className="mt-4 text-sm text-rose-400">{error}</p>}
+      <button type="button" onClick={() => sync([...guardrails, { title: "", description: "" }])} className="mt-5 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-500 transition-colors hover:border-emerald-400 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-emerald-400">+ Add safety rule</button>
+      {error && <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
     </main>
   );
 }

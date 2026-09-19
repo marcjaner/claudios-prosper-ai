@@ -22,13 +22,16 @@ from stt import (
 from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
+from .language import DEFAULT_LANGUAGE, CallLanguage, LanguageTracker, phrases
 from .reply import AgentReply
+from .stage_runtime import CallGraph
 
 logger = logging.getLogger(__name__)
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 USER_TURN_STOP_TIMEOUT_SECONDS = 6
-INITIAL_GREETING = "Clínica Arenal, ¿en qué puedo ayudarle?"
+# The greeting plays before the caller has said a word, so it is always the default.
+INITIAL_GREETING = phrases(DEFAULT_LANGUAGE).greeting
 
 
 async def log_completed_turn(meta: CallMeta, content: str) -> None:
@@ -82,13 +85,17 @@ def create_transcription_agent(
         repository = CallRepository(database)
         await repository.seed_default_guardrails()
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
+        state = CallGraph.start()
+        language = CallLanguage()
+        emit(meta.call_id, "stage_entered", {"turn": 0, "step": 0, "stage": state.stage_id, "from": None, "cleared": []})
         processors = [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
             TranscriptObserver(meta),
+            LanguageTracker(meta.call_id, language),
             create_user_aggregator(meta, on_completed_turn),
-            AgentReply(meta.call_id, repository),
+            AgentReply(meta.call_id, repository, state, language),
             create_tts(),
         ]
         logger.info(

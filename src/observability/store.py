@@ -1,8 +1,10 @@
 import json
 import sqlite3
 import time
-from datetime import date, datetime
+from bisect import bisect_right
+from datetime import date, datetime, timedelta
 from datetime import time as clock
+from math import ceil
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -20,6 +22,7 @@ BROADCAST_ONLY = frozenset({"stt_partial"})
 # apart: a refusal with the right reason scores exactly like a booking.
 WROTE = ("BOOK", "RESCHEDULE", "CANCEL", "REGISTER")
 CLOSED = ("NO_ACTION", "ESCALATE")
+SUCCESSFUL = WROTE + ("NO_ACTION",)
 
 # Bar widths that read as time: a minute, five, a quarter, an hour, six, a day.
 BUCKET_LADDER = (60, 300, 900, 3600, 6 * 3600, DAY_SECONDS)
@@ -180,6 +183,8 @@ class Store:
         insurer: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        started_after: float | None = None,
+        started_before: float | None = None,
     ) -> tuple[str, list]:
         """The filter the table and the histogram share, so they cannot drift."""
         clauses, params = [], []
@@ -205,7 +210,13 @@ class Store:
             params.append(_day_start(date_from))
         if date_to:
             clauses.append("started_at < ?")
-            params.append(_day_start(date_to) + DAY_SECONDS)
+            params.append(_day_start(date_to, offset=1))
+        if started_after is not None:
+            clauses.append("started_at >= ?")
+            params.append(started_after)
+        if started_before is not None:
+            clauses.append("started_at < ?")
+            params.append(started_before)
         if search:
             # Finding a phrase and landing on the call that said it is the
             # point of the history view, so search runs over what was spoken.
@@ -241,12 +252,38 @@ class Store:
                 f"FROM calls {where}",
                 params,
             ).fetchone()
-            if span["first"] is None:
+            first = (
+                _day_start(filters["date_from"])
+                if filters.get("date_from") else span["first"]
+            )
+            last = (
+                _day_start(filters["date_to"], offset=1) - 0.001
+                if filters.get("date_to") else span["last"]
+            )
+            if filters.get("started_after") is not None:
+                first = (
+                    max(first, filters["started_after"])
+                    if filters.get("date_from") else filters["started_after"]
+                )
+            if filters.get("started_before") is not None:
+                end = filters["started_before"] - 0.001
+                last = min(last, end) if filters.get("date_to") else end
+            if first is None or last is None or first > last:
                 return {"bucket_seconds": BUCKET_LADDER[0], "buckets": []}
 
-            bucket = _pick_bucket(span["last"] - span["first"], buckets)
+            bucket = _pick_bucket(last - first, buckets)
+            if filters.get("date_from") or filters.get("date_to"):
+                bucket = max(DAY_SECONDS, bucket)
+            starts = _bucket_starts(first, last, bucket)
+            connection.create_function(
+                "histogram_bucket", 1, lambda ts: starts[bisect_right(starts, ts) - 1]
+            )
+            action_columns = ", ".join(
+                f"SUM(COALESCE(outcome, '') = ?) AS {action}" for action in WROTE + CLOSED
+            )
             rows = connection.execute(
-                f"SELECT CAST(started_at / ? AS INTEGER) * ? AS bucket, "
+                f"SELECT histogram_bucket(started_at) AS bucket, COUNT(*) AS total, "
+                f"{action_columns}, "
                 # COALESCE, not a bare IN: SQL's three-valued logic makes
                 # `NULL IN (...)` itself NULL, and a bucket of calls that
                 # submitted nothing would sum to NULL instead of zero.
@@ -254,9 +291,23 @@ class Store:
                 f"SUM(COALESCE(outcome, '') IN ({_marks(CLOSED)})) AS closed, "
                 f"SUM(COALESCE(outcome, '') NOT IN ({_marks(WROTE + CLOSED)})) AS absent "
                 f"FROM calls {where} GROUP BY bucket ORDER BY bucket",
-                (bucket, bucket, *WROTE, *CLOSED, *WROTE, *CLOSED, *params),
+                (*WROTE, *CLOSED, *WROTE, *CLOSED, *WROTE, *CLOSED, *params),
             ).fetchall()
-        return {"bucket_seconds": bucket, "buckets": [dict(row) for row in rows]}
+        counts = {row["bucket"]: dict(row) for row in rows}
+        result = []
+        for start in starts:
+            values = counts.get(start, {})
+            result.append({
+                "bucket": start,
+                **{key: values.get(key, 0) for key in ("total", "wrote", "closed", "absent")},
+                "outcomes": {action: values.get(action, 0) for action in WROTE + CLOSED},
+            })
+        return {
+            "bucket_seconds": bucket,
+            "range_start": first,
+            "range_end": last,
+            "buckets": result,
+        }
 
     def stats(self) -> dict:
         with self._read() as connection:
@@ -271,6 +322,18 @@ class Store:
                 "SELECT COALESCE(outcome, 'sin registrar') AS outcome, COUNT(*) AS count "
                 "FROM calls GROUP BY 1 ORDER BY count DESC"
             ).fetchall()
+            completed = connection.execute(
+                "SELECT COUNT(*) FROM calls WHERE ended_at IS NOT NULL"
+            ).fetchone()[0]
+            successful = connection.execute(
+                f"SELECT COUNT(*) FROM calls WHERE ended_at IS NOT NULL "
+                f"AND outcome IN ({_marks(SUCCESSFUL)})",
+                SUCCESSFUL,
+            ).fetchone()[0]
+            bookings = connection.execute(
+                "SELECT COUNT(*) FROM calls WHERE ended_at IS NOT NULL AND outcome = ?",
+                ("BOOK",),
+            ).fetchone()[0]
             latencies = [
                 row[0]
                 for row in connection.execute(
@@ -284,6 +347,8 @@ class Store:
             "failed": totals["failed"] or 0,
             "avg_cost_eur": totals["avg_cost"],
             "total_cost_eur": totals["total_cost"],
+            "success_pct": _percentage(successful, completed),
+            "bookings_pct": _percentage(bookings, completed),
             "outcomes": [dict(row) for row in outcomes],
             # The number that decides whether the agent sounds alive.
             "ttfa_p50": _percentile(latencies, 0.50),
@@ -331,6 +396,10 @@ class Store:
         ]
 
 
+def _percentage(part: int, total: int) -> float:
+    return round(part * 100 / total, 1) if total else 0.0
+
+
 def _percentile(values: list[float], fraction: float) -> float | None:
     if not values:
         return None
@@ -338,9 +407,11 @@ def _percentile(values: list[float], fraction: float) -> float | None:
     return round(values[index], 3)
 
 
-def _day_start(day: str) -> float:
+def _day_start(day: str, offset: int = 0) -> float:
     return datetime.combine(
-        date.fromisoformat(day), clock.min, tzinfo=CLINIC_TIMEZONE
+        date.fromisoformat(day) + timedelta(days=offset),
+        clock.min,
+        tzinfo=CLINIC_TIMEZONE,
     ).timestamp()
 
 
@@ -348,8 +419,19 @@ def _marks(values: tuple[str, ...]) -> str:
     return ", ".join("?" * len(values))
 
 
+def _bucket_starts(first: float, last: float, bucket: int) -> list[int]:
+    if bucket < DAY_SECONDS:
+        return list(range(int(first // bucket) * bucket, int(last) + 1, bucket))
+    start = datetime.fromtimestamp(first, CLINIC_TIMEZONE).date()
+    end = datetime.fromtimestamp(last, CLINIC_TIMEZONE).date()
+    return [
+        int(_day_start((start + timedelta(days=offset)).isoformat()))
+        for offset in range(0, (end - start).days + 1, bucket // DAY_SECONDS)
+    ]
+
+
 def _pick_bucket(span_seconds: float, target: int) -> int:
-    for bucket in BUCKET_LADDER:
+    for bucket in (*BUCKET_LADDER, 7 * DAY_SECONDS, 30 * DAY_SECONDS):
         if span_seconds / bucket <= target:
             return bucket
-    return BUCKET_LADDER[-1]
+    return ceil(span_seconds / (max(1, target) * DAY_SECONDS)) * DAY_SECONDS

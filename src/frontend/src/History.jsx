@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import OutcomeHistogram from "./OutcomeHistogram.jsx";
-import { INSURERS, OUTCOMES, REASONS, outcomeStyle } from "./outcomes.js";
+import { historyDateRange, INSURERS, OUTCOMES, REASONS, outcomeStyle } from "./outcomes.js";
 
 const SEARCH_DEBOUNCE_MS = 250;
 
-const timeFormat = new Intl.DateTimeFormat("es-ES", {
+const timeFormat = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "short",
   timeStyle: "medium",
   timeZone: "Europe/Madrid",
@@ -19,62 +19,64 @@ function formatDuration(seconds) {
 
 function StatTile({ label, value, unit, hint }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 font-mono text-2xl tabular-nums text-slate-100">
+    <div className="clinic-panel px-5 py-4">
+      <p className="text-sm font-medium text-slate-500">{label}</p>
+      <p className="mt-3 text-3xl font-semibold tracking-[-0.04em] tabular-nums text-slate-950">
         {value}
-        {unit && <span className="ml-1 text-sm text-slate-500">{unit}</span>}
+        {unit && <span className="ml-1 text-sm font-medium text-slate-400">{unit}</span>}
       </p>
-      {hint && <p className="mt-0.5 text-xs text-slate-600">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-slate-400">{hint}</p>}
     </div>
   );
 }
 
 function OutcomeCell({ call }) {
   if (!call.outcome) {
-    return <span className="text-slate-600">—</span>;
+    return <span className="text-slate-400">—</span>;
   }
   const style = outcomeStyle(call.outcome);
   return (
     <span className="inline-flex items-center gap-1.5">
       {call.guardrail_breached && <span title="Guardrail breached" className="text-amber-400">⚠</span>}
       <span style={{ backgroundColor: style.color }} className="h-2 w-2 rounded-full" />
-      <span className="text-slate-200">{style.label}</span>
-      {call.reason && <span className="font-mono text-xs text-slate-500">{call.reason}</span>}
+      <span className="font-medium text-slate-700">{style.label}</span>
+      {call.reason && <span className="text-xs text-slate-400">{call.reason}</span>}
     </span>
   );
-}
-
-function ScoringCell({ call }) {
-  if (call.score_overall != null) {
-    return (
-      <span className="inline-block rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs tabular-nums text-slate-200">
-        {Math.round(call.score_overall)}
-      </span>
-    );
-  }
-  if (call.score_error) {
-    return <span className="font-mono text-xs text-rose-400">error</span>;
-  }
-  return <span className="text-slate-600">—</span>;
 }
 
 export default function History() {
   const [calls, setCalls] = useState([]);
   const [stats, setStats] = useState(null);
   const [histogram, setHistogram] = useState(null);
-  const [filters, setFilters] = useState({
+  const [range, setRange] = useState("6h");
+  const [filters, setFilters] = useState(() => ({
     q: "",
     outcome: "",
     reason: "",
     name: "",
     insurer: "",
-    date_from: "",
-    date_to: "",
-  });
+    ...historyDateRange("6h"),
+  }));
   const [query, setQuery] = useState("");
   const [nameQuery, setNameQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  function changeRange(value) {
+    setRange(value);
+    setFilters((previous) => ({
+      ...previous,
+      ...(value === "custom"
+        ? { started_after: "", started_before: "" }
+        : historyDateRange(value)),
+    }));
+  }
+
+  function changeDate(key, value) {
+    setRange("custom");
+    setFilters((previous) => ({ ...previous, started_after: "", started_before: "", [key]: value }));
+  }
 
   useEffect(() => {
     const timer = setTimeout(
@@ -93,18 +95,35 @@ export default function History() {
     ]);
     let stale = false;
     setLoading(true);
+    setError(null);
+    setHistogram(null);
+    if (filters.date_from && filters.date_to && filters.date_from > filters.date_to) {
+      setError("Start date must be on or before end date.");
+      setCalls([]);
+      setLoading(false);
+      return;
+    }
+    const load = (url) => fetch(url).then((response) => {
+      if (!response.ok) throw new Error("Could not load call history. Please try again.");
+      return response.json();
+    });
     Promise.all([
-      fetch(`/api/calls?${params}`).then((r) => r.json()),
-      fetch("/api/stats").then((r) => r.json()),
+      load(`/api/calls?${params}`),
+      load("/api/stats"),
       // The histogram reads the same filters, so the picture and the table
       // can never disagree about what is being looked at.
-      fetch(`/api/histogram?${params}`).then((r) => r.json()),
+      load(`/api/histogram?${params}`),
     ])
       .then(([callsBody, statsBody, histogramBody]) => {
         if (stale) return;
         setCalls(callsBody.calls);
         setStats(statsBody);
         setHistogram(histogramBody);
+      })
+      .catch(() => {
+        if (stale) return;
+        setCalls([]);
+        setError("Could not load call history. Please try again.");
       })
       .finally(() => !stale && setLoading(false));
     return () => {
@@ -118,51 +137,54 @@ export default function History() {
   );
 
   return (
-    <div className="space-y-4 p-6">
+    <main className="clinic-page space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-emerald-700">Operations archive</p>
+          <h1 className="mt-2 text-4xl font-semibold tracking-[-0.045em] text-slate-950 sm:text-5xl">
+            Call history
+          </h1>
+        </div>
+        <p className="max-w-sm text-sm leading-6 text-slate-500">
+          Review completed conversations, outcomes, response time and cost.
+        </p>
+      </header>
+
       {stats && (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-            <StatTile label="Llamadas" value={stats.calls} hint={`${stats.live} en curso`} />
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatTile label="Calls" value={stats.calls} hint={`${stats.live} active`} />
             <StatTile
-              label="Primera voz p50"
-              value={stats.ttfa_p50?.toFixed(2) ?? "—"}
-              unit="s"
-              hint="silencio = caso fallado"
-            />
-            <StatTile label="Primera voz p95" value={stats.ttfa_p95?.toFixed(2) ?? "—"} unit="s" />
-            <StatTile
-              label="Coste"
+              label="Cost"
               value={stats.total_cost_eur?.toFixed(2) ?? "—"}
               unit="€"
               hint={
-                stats.avg_cost_eur ? `${stats.avg_cost_eur.toFixed(4)} € por llamada` : "sin medir"
+                stats.avg_cost_eur ? `${stats.avg_cost_eur.toFixed(4)} € per call` : "Not measured"
               }
             />
-            <StatTile
-              label="Con error"
-              value={stats.failed}
-              hint={stats.calls ? `${Math.round((stats.failed / stats.calls) * 100)}%` : ""}
-            />
+            <StatTile label="Success calls" value={`${stats.success_pct.toFixed(1)}%`} hint="Resolved automatically" />
+            <StatTile label="Bookings" value={`${stats.bookings_pct.toFixed(1)}%`} hint="Of completed calls" />
           </div>
-          <OutcomeHistogram histogram={histogram} />
         </>
       )}
 
-      <div className="flex flex-wrap gap-2">
+      <OutcomeHistogram histogram={histogram} range={range} onRangeChange={changeRange} loading={loading} error={error} />
+
+      <section aria-label="History filters" className="clinic-panel flex flex-wrap gap-2 p-3">
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Buscar en las transcripciones…"
-          className="min-w-64 flex-1 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-slate-600 focus:outline-none"
+          placeholder="Search transcripts…"
+          className="clinic-control min-w-64 flex-1"
         />
         <select
           value={filters.outcome}
           onChange={(event) =>
             setFilters((previous) => ({ ...previous, outcome: event.target.value }))
           }
-          className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200"
+          className="clinic-control"
         >
-          <option value="">Cualquier resultado</option>
+          <option value="">Any outcome</option>
           {Object.entries(OUTCOMES).map(([verb, { label }]) => (
             <option key={verb} value={verb}>
               {label}
@@ -172,43 +194,41 @@ export default function History() {
         <input
           value={nameQuery}
           onChange={(event) => setNameQuery(event.target.value)}
-          placeholder="Nombre del paciente"
-          className="w-56 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-slate-600 focus:outline-none"
+          placeholder="Patient name"
+          className="clinic-control w-56"
         />
         <select
           value={filters.insurer}
           onChange={(event) =>
             setFilters((previous) => ({ ...previous, insurer: event.target.value }))
           }
-          className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-200"
+          className="clinic-control"
         >
-          <option value="">Cualquier seguro</option>
+          <option value="">Any insurer</option>
           {INSURERS.map((insurer) => (
             <option key={insurer} value={insurer}>
               {insurer}
             </option>
           ))}
         </select>
-        <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-500">
-          desde
+        <label className="clinic-control flex items-center gap-2 text-xs text-slate-500">
+          From
           <input
             type="date"
             value={filters.date_from}
-            onChange={(event) =>
-              setFilters((previous) => ({ ...previous, date_from: event.target.value }))
-            }
-            className="bg-transparent font-mono text-slate-200 focus:outline-none"
+            max={filters.date_to || undefined}
+            onChange={(event) => changeDate("date_from", event.target.value)}
+            className="bg-transparent text-slate-700 focus:outline-none"
           />
         </label>
-        <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-500">
-          hasta
+        <label className="clinic-control flex items-center gap-2 text-xs text-slate-500">
+          To
           <input
             type="date"
             value={filters.date_to}
-            onChange={(event) =>
-              setFilters((previous) => ({ ...previous, date_to: event.target.value }))
-            }
-            className="bg-transparent font-mono text-slate-200 focus:outline-none"
+            min={filters.date_from || undefined}
+            onChange={(event) => changeDate("date_to", event.target.value)}
+            className="bg-transparent text-slate-700 focus:outline-none"
           />
         </label>
         <select
@@ -216,9 +236,9 @@ export default function History() {
           onChange={(event) =>
             setFilters((previous) => ({ ...previous, reason: event.target.value }))
           }
-          className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-200"
+          className="clinic-control"
         >
-          <option value="">Cualquier motivo</option>
+          <option value="">Any reason</option>
           {REASONS.map((reason) => (
             <option key={reason} value={reason}>
               {reason}
@@ -230,80 +250,76 @@ export default function History() {
             onClick={() => {
               setQuery("");
               setNameQuery("");
+              setRange("all");
               setFilters({
                 q: "",
                 outcome: "",
                 reason: "",
                 name: "",
                 insurer: "",
-                date_from: "",
-                date_to: "",
+                ...historyDateRange("all"),
               });
             }}
-            className="rounded-lg border border-slate-800 px-3 py-2 text-sm text-slate-400 hover:text-slate-200"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-500 hover:border-slate-300 hover:text-slate-800"
           >
-            Limpiar
+            Clear
           </button>
         )}
-      </div>
+      </section>
 
-      <div className="overflow-hidden rounded-xl border border-slate-800">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-900/80 text-left text-xs uppercase tracking-wide text-slate-500">
+      <div className="clinic-panel overflow-x-auto">
+        <table className="w-full min-w-[900px] text-sm">
+          <thead className="border-b border-slate-100 bg-slate-50/70 text-left text-xs text-slate-500">
             <tr>
-              <th className="px-4 py-2 font-medium">Hora</th>
-              <th className="px-4 py-2 font-medium">Duración</th>
-              <th className="px-4 py-2 font-medium">Paciente</th>
-              <th className="px-4 py-2 font-medium">Resultado</th>
-              <th className="px-4 py-2 font-medium">Score</th>
-              <th className="px-4 py-2 font-medium">Primera voz</th>
-              <th className="px-4 py-2 font-medium">Coste</th>
-              <th className="px-4 py-2 font-medium">Seguro</th>
+              <th className="px-5 py-4 font-semibold">Time</th>
+              <th className="px-5 py-4 font-semibold">Duration</th>
+              <th className="px-5 py-4 font-semibold">Patient</th>
+              <th className="px-5 py-4 font-semibold">Outcome</th>
+              <th className="px-5 py-4 font-semibold">First response</th>
+              <th className="px-5 py-4 font-semibold">Cost</th>
+              <th className="px-5 py-4 font-semibold">Insurer</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800/70">
+          <tbody className="divide-y divide-slate-100">
             {calls.map((call) => (
               <tr
                 key={call.call_id}
                 onClick={() => {
-                  window.location.hash = `#/call/${call.call_id}`;
+                  window.location.hash = `#/call/${call.call_id}?from=history`;
                 }}
-                className="cursor-pointer hover:bg-slate-900/50"
+                className="cursor-pointer transition-colors hover:bg-emerald-50/50"
               >
-                <td className="whitespace-nowrap px-4 py-2 font-mono text-xs text-slate-400">
+                <td className="whitespace-nowrap px-5 py-4 text-xs tabular-nums text-slate-500">
                   {timeFormat.format(new Date(call.started_at * 1000))}
                 </td>
-                <td className="px-4 py-2 font-mono tabular-nums text-slate-300">
+                <td className="px-5 py-4 font-medium tabular-nums text-slate-700">
                   {formatDuration(call.ended_at ? call.ended_at - call.started_at : null)}
                 </td>
-                <td className="px-4 py-2">
+                <td className="px-5 py-4">
                   {call.patient_name ? (
                     <>
-                      <span className="text-slate-200">{call.patient_name}</span>
-                      <span className="ml-2 font-mono text-xs text-slate-600">
+                      <span className="font-medium text-slate-800">{call.patient_name}</span>
+                      <span className="ml-2 text-xs text-slate-400">
                         {call.patient_id}
                       </span>
                     </>
                   ) : (
-                    <span className="text-slate-600">sin identificar</span>
+                    <span className="text-slate-400">Unidentified</span>
                   )}
                 </td>
-                <td className="px-4 py-2">
+                <td className="px-5 py-4">
                   <OutcomeCell call={call} />
                   {call.error && (
-                    <p className="mt-0.5 truncate text-xs text-rose-400">{call.error}</p>
+                    <p className="mt-0.5 truncate text-xs text-rose-600">{call.error}</p>
                   )}
                 </td>
-                <td className="px-4 py-2">
-                  <ScoringCell call={call} />
-                </td>
-                <td className="px-4 py-2 font-mono tabular-nums text-slate-400">
+                <td className="px-5 py-4 tabular-nums text-slate-500">
                   {call.ttfa_seconds == null ? "—" : `${call.ttfa_seconds.toFixed(2)}s`}
                 </td>
-                <td className="px-4 py-2 font-mono tabular-nums text-slate-400">
+                <td className="px-5 py-4 tabular-nums text-slate-500">
                   {call.cost_eur == null ? "—" : `${call.cost_eur.toFixed(4)} €`}
                 </td>
-                <td className="px-4 py-2 font-mono text-xs text-slate-500">
+                <td className="px-5 py-4 text-xs text-slate-500">
                   {call.insurer ?? "—"}
                 </td>
               </tr>
@@ -311,11 +327,11 @@ export default function History() {
           </tbody>
         </table>
         {calls.length === 0 && (
-          <p className="px-4 py-12 text-center text-slate-600">
-            {loading ? "Cargando…" : "Ninguna llamada coincide con el filtro."}
+          <p className="px-4 py-12 text-center text-slate-400">
+            {loading ? "Loading…" : "No calls match these filters."}
           </p>
         )}
       </div>
-    </div>
+    </main>
   );
 }

@@ -106,6 +106,7 @@ def create_app(
                 await guardrail_database.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.state.active_workers = {}
 
     # For the Vite dev server only. This has nothing to do with
     # FastAPIWebsocketParams(allowed_origins=[]), which guards the Twilio
@@ -137,7 +138,12 @@ def create_app(
         # One pipeline per socket. A Run All opens ten at once and problem 2
         # opens twenty; nothing may be shared between them.
         try:
-            await run_call(websocket, build_agent, initial_greeting=initial_greeting)
+            await run_call(
+                websocket,
+                build_agent,
+                initial_greeting=initial_greeting,
+                active_workers=app.state.active_workers,
+            )
         except Exception:  # noqa: BLE001 - never let one call escape into the server
             logger.exception("unhandled error serving call")
 
