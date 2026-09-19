@@ -9,9 +9,10 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from loguru import logger
+from sqlalchemy.engine import make_url
+
 from observability import EventBus, Store, set_bus
 from observability.api import register_dashboard
-from sqlalchemy.engine import make_url
 
 from .transport import AgentFactory, run_call
 
@@ -64,7 +65,9 @@ def read_database_snapshot() -> dict[str, Any]:
     return {"path": str(database_path), "tables": tables}
 
 
-def create_app(build_agent: AgentFactory) -> FastAPI:
+def create_app(
+    build_agent: AgentFactory, *, initial_greeting: str | None = None
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         store = Store(CONSOLE_DB_PATH)
@@ -111,7 +114,7 @@ def create_app(build_agent: AgentFactory) -> FastAPI:
         # One pipeline per socket. A Run All opens ten at once and problem 2
         # opens twenty; nothing may be shared between them.
         try:
-            await run_call(websocket, build_agent)
+            await run_call(websocket, build_agent, initial_greeting=initial_greeting)
         except Exception:  # noqa: BLE001 - never let one call escape into the server
             logger.exception("unhandled error serving call")
 
