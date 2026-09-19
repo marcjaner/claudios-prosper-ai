@@ -1,8 +1,12 @@
 import asyncio
+import contextlib
+import json
+import sqlite3
 from datetime import datetime
 
 import pytest
 
+import observability
 from observability import CallUpdate, Event, EventBus, Store
 from observability.store import CLINIC_TIMEZONE
 
@@ -47,6 +51,59 @@ def test_update_call_upserts_and_keeps_earlier_fields(store):
     assert call["ended_at"] == 42.0
 
 
+def test_save_score_persists_result_and_clears_error(store):
+    store.write([CallUpdate("CA1", {"started_at": 1.0, "ended_at": 2.0})])
+    result = {
+        "overall": 62.5,
+        "model": "jev-latest",
+        "scored_at": 123.0,
+        "dimensions": {"resolution": {"score": 3}},
+    }
+    store.save_score("CA1", result=result)
+
+    call = store.get_call("CA1")
+    assert call is not None
+    assert call["score_overall"] == 62.5
+    assert call["score_error"] is None
+    assert json.loads(call["score_json"]) == result
+
+    store.save_score("CA1", error="jev down")
+    call = store.get_call("CA1")
+    assert call is not None
+    assert call["score_overall"] is None
+    assert call["score_json"] is None
+    assert call["score_error"] == "jev down"
+
+
+def test_save_score_does_not_create_a_call(store):
+    store.save_score("GHOST", result={"overall": 1.0})
+    assert store.get_call("GHOST") is None
+
+
+def test_migration_gives_score_overall_real_affinity(tmp_path):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE calls (call_id TEXT PRIMARY KEY, started_at REAL NOT NULL)"
+        )
+
+    store = Store(path)
+    affinity = {
+        row[1]: row[2].upper()
+        for row in store._writer.execute("PRAGMA table_info(calls)")
+    }
+    assert affinity["score_overall"] == "REAL"
+    assert affinity["score_json"] == "TEXT"
+    assert affinity["score_error"] == "TEXT"
+
+    store.write([CallUpdate("CA1", {"started_at": 1.0})])
+    store.save_score("CA1", result={"overall": 87.5})
+    call = store.get_call("CA1")
+    assert call is not None
+    assert call["score_overall"] == 87.5
+    store.close()
+
+
 def test_unknown_fields_never_reach_sql(store):
     store.write([CallUpdate("CA1", {"started_at": 1.0, "; DROP TABLE calls": "x"})])
     assert store.get_call("CA1") is not None
@@ -84,6 +141,47 @@ def test_bus_delivers_to_store_and_subscribers(store):
         assert len(delivered) == 2
 
     asyncio.run(scenario())
+
+
+def test_emit_from_a_worker_thread_reaches_subscribers_and_store(store):
+    async def scenario():
+        bus = EventBus(store)
+        observability.set_bus(bus)
+        task = asyncio.create_task(bus.run())
+        while bus._loop is None:
+            await asyncio.sleep(0)
+        async def persisted():
+            while True:
+                call = store.get_call("CA1")
+                if call and call["state"] == "thinking":
+                    return
+                await asyncio.sleep(0)
+
+        try:
+            with bus.subscribe() as queue:
+                await asyncio.to_thread(
+                    observability.emit, "CA1", "stt_final", {"text": "hola"}
+                )
+                await asyncio.to_thread(
+                    observability.update_call, "CA1", state="thinking"
+                )
+                delivered = [
+                    await asyncio.wait_for(queue.get(), timeout=1),
+                    await asyncio.wait_for(queue.get(), timeout=1),
+                ]
+                await asyncio.wait_for(persisted(), timeout=1)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            observability.set_bus(None)
+        return delivered
+
+    delivered = asyncio.run(scenario())
+
+    assert [event["kind"] for event in store.get_events("CA1")] == ["stt_final"]
+    assert store.get_call("CA1")["state"] == "thinking"
+    assert len(delivered) == 2
 
 
 def test_a_full_queue_drops_instead_of_blocking(store):

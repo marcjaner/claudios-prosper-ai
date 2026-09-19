@@ -42,7 +42,12 @@ CALL_FIELDS = (
     "ttfa_seconds",
     "error",
     "verdict_json",
+    "score_overall",
+    "score_json",
+    "score_error",
 )
+
+COLUMN_AFFINITY = {"score_overall": "REAL"}
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -62,7 +67,10 @@ CREATE TABLE IF NOT EXISTS calls (
     cost_eur REAL,
     ttfa_seconds REAL,
     error TEXT,
-    verdict_json TEXT
+    verdict_json TEXT,
+    score_overall REAL,
+    score_json TEXT,
+    score_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -100,7 +108,10 @@ class Store:
         present = {row[1] for row in self._writer.execute("PRAGMA table_info(calls)")}
         for name in CALL_FIELDS:
             if name not in present:
-                self._writer.execute(f"ALTER TABLE calls ADD COLUMN {name} TEXT")
+                affinity = COLUMN_AFFINITY.get(name, "TEXT")
+                self._writer.execute(
+                    f"ALTER TABLE calls ADD COLUMN {name} {affinity}"
+                )
 
     def close(self) -> None:
         self._writer.close()
@@ -274,6 +285,22 @@ class Store:
             "ttfa_p50": _percentile(latencies, 0.50),
             "ttfa_p95": _percentile(latencies, 0.95),
         }
+
+    def save_score(
+        self, call_id: str, result: dict | None = None, error: str | None = None
+    ) -> None:
+        if result is not None:
+            self._writer.execute(
+                "UPDATE calls SET score_overall = ?, score_json = ?, "
+                "score_error = NULL WHERE call_id = ?",
+                (result["overall"], json.dumps(result, ensure_ascii=False), call_id),
+            )
+        else:
+            self._writer.execute(
+                "UPDATE calls SET score_overall = NULL, score_json = NULL, "
+                "score_error = ? WHERE call_id = ?",
+                (error, call_id),
+            )
 
     def get_call(self, call_id: str) -> dict | None:
         with self._read() as connection:
