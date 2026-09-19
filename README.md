@@ -16,18 +16,18 @@ uv run python scripts/stt_smoke.py path/to/audio.wav
 
 The smoke test requires `ffmpeg` on `PATH`.
 
-## Transcript server
+## Voice agent
 
-Start the production transport with per-call Deepgram STT and user-turn
-aggregation:
+Configure `PLATFORM_API_KEY`, `PLATFORM_API_BASE_URL`, `HELMCODE_API_KEY`,
+`DEEPGRAM_API_KEY`, and the selected TTS provider in `.env`, then start the
+full voice pipeline:
 
 ```shell
 PYTHONPATH=src uv run python -m agent
 ```
 
-Each completed caller turn is emitted from Pipecat's `on_user_turn_stopped`
-event and currently logged with its `call_id`. This server is the transcript
-boundary for the future LLM layer; it intentionally has no TTS response yet.
+Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
+with Prosper clinic tools, and TTS.
 
 ## Twilio transport
 

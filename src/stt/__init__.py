@@ -1,3 +1,13 @@
-from .deepgram import create_deepgram_stt
+from .deepgram import (
+    DeepgramEndpointingStopStrategy,
+    DeepgramEOTCoordinator,
+    DeepgramEOTEventFrame,
+    create_deepgram_stt,
+)
 
-__all__ = ["create_deepgram_stt"]
+__all__ = [
+    "DeepgramEOTCoordinator",
+    "DeepgramEOTEventFrame",
+    "DeepgramEndpointingStopStrategy",
+    "create_deepgram_stt",
+]

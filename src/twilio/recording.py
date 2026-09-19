@@ -40,6 +40,7 @@ from observability.frames import (
     ToolCallStartedFrame,
     TTSRequestedFrame,
 )
+from stt import DeepgramEOTEventFrame
 
 from .handshake import CallMeta
 
@@ -124,6 +125,16 @@ class CallTimelineObserver(BaseObserver):
                 "text": frame.text,
                 "final": True,
                 "provider_finalized": frame.finalized,
+            }
+        if isinstance(frame, DeepgramEOTEventFrame):
+            return {
+                "event": "eot_decision",
+                "transcript": frame.transcript,
+                "deepgram_event": frame.deepgram_event,
+                "vad_state": frame.vad_state,
+                "smart_turn_probability": frame.smart_turn_probability,
+                "decision": frame.decision,
+                "cancellation_reason": frame.cancellation_reason,
             }
         if isinstance(frame, VADUserStartedSpeakingFrame):
             return {
