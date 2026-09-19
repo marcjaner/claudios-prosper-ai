@@ -22,6 +22,7 @@ from .clinic_api import ClinicApi
 from .reply import AgentReply
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
+USER_TURN_STOP_TIMEOUT_SECONDS = 6
 
 
 async def log_completed_turn(meta: CallMeta, content: str) -> None:
@@ -32,7 +33,7 @@ def create_context_aggregators(
     meta: CallMeta, on_completed_turn: CompletedTurnCallback
 ):
     params = LLMUserAggregatorParams(
-        user_turn_stop_timeout=30,
+        user_turn_stop_timeout=USER_TURN_STOP_TIMEOUT_SECONDS,
         user_turn_strategies=UserTurnStrategies(
             stop=[DeepgramEndpointingStopStrategy()]
         ),

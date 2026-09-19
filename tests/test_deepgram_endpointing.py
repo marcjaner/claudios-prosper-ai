@@ -61,8 +61,8 @@ class FakeSmartTurn(BaseTurnAnalyzer):
 
 
 class CapturingEOTCoordinator(DeepgramEOTCoordinator):
-    def __init__(self, smart_turn: BaseTurnAnalyzer):
-        super().__init__(smart_turn)
+    def __init__(self, smart_turn: BaseTurnAnalyzer, **kwargs):
+        super().__init__(smart_turn, **kwargs)
         self.emitted = []
 
     async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
@@ -121,7 +121,9 @@ def test_smart_turn_complete_commits_after_grace_period():
 
 def test_smart_turn_incomplete_vetoes_deepgram_candidate():
     async def run():
-        coordinator = CapturingEOTCoordinator(FakeSmartTurn(probability=0.5))
+        coordinator = CapturingEOTCoordinator(
+            FakeSmartTurn(probability=0.5), incomplete_timeout_seconds=0.1
+        )
         transcript = speech_final("Quiero pedir")
         await coordinator.process_frame(transcript, FrameDirection.DOWNSTREAM)
         await asyncio.sleep(0.01)
@@ -131,11 +133,55 @@ def test_smart_turn_incomplete_vetoes_deepgram_candidate():
 
     assert transcript.finalized is False
     assert not any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
-    assert emitted[-1] is transcript
-    decision = emitted[-2]
+    decision = emitted[-1]
     assert isinstance(decision, DeepgramEOTEventFrame)
     assert decision.smart_turn_probability == 0.5
+    assert decision.decision == "deferred"
     assert decision.cancellation_reason == "smart_turn_incomplete"
+
+
+def test_smart_turn_incomplete_commits_after_bounded_timeout():
+    async def run():
+        coordinator = CapturingEOTCoordinator(
+            FakeSmartTurn(probability=0.2), incomplete_timeout_seconds=0.02
+        )
+        transcript = speech_final("Quiero una cita")
+        await coordinator.process_frame(transcript, FrameDirection.DOWNSTREAM)
+        await asyncio.sleep(0.03)
+        return transcript, coordinator.emitted
+
+    transcript, emitted = asyncio.run(run())
+
+    assert transcript.finalized is True
+    assert any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    decisions = [
+        frame.decision for frame in emitted if isinstance(frame, DeepgramEOTEventFrame)
+    ]
+    assert decisions == ["candidate", "deferred", "committed"]
+
+
+def test_smart_turn_incomplete_still_cancels_when_speech_resumes():
+    async def run():
+        coordinator = CapturingEOTCoordinator(
+            FakeSmartTurn(probability=0.2), incomplete_timeout_seconds=0.05
+        )
+        transcript = speech_final("Quiero pedir")
+        await coordinator.process_frame(transcript, FrameDirection.DOWNSTREAM)
+        await asyncio.sleep(0.01)
+        await coordinator.process_frame(
+            VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM
+        )
+        await asyncio.sleep(0.06)
+        return transcript, coordinator.emitted
+
+    transcript, emitted = asyncio.run(run())
+
+    assert transcript.finalized is False
+    assert not any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    decisions = [
+        frame.decision for frame in emitted if isinstance(frame, DeepgramEOTEventFrame)
+    ]
+    assert decisions == ["candidate", "deferred", "cancelled"]
 
 
 def test_smart_turn_cannot_stop_without_deepgram_candidate():
@@ -202,11 +248,43 @@ def test_new_transcript_cancels_pending_turn_stop():
     assert cancellation.cancellation_reason == "new_transcript"
 
 
-def test_segment_final_does_not_create_eot_candidate():
+def test_segment_final_after_vad_stops_can_end_turn():
     async def run():
         coordinator = CapturingEOTCoordinator(FakeSmartTurn(probability=0.9))
         transcript = TranscriptionFrame(
             "Quiero pedir",
+            "caller",
+            "2026-09-19T00:00:00Z",
+            result=SimpleNamespace(speech_final=False),
+        )
+        await coordinator.process_frame(
+            VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM
+        )
+        await coordinator.process_frame(transcript, FrameDirection.DOWNSTREAM)
+        await coordinator.process_frame(
+            VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM
+        )
+        await asyncio.sleep(0.8)
+        return transcript, coordinator.emitted
+
+    transcript, emitted = asyncio.run(run())
+
+    assert transcript.finalized is True
+    assert sum(frame is transcript for frame in emitted) == 1
+    assert any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    commit = next(
+        frame
+        for frame in emitted
+        if isinstance(frame, DeepgramEOTEventFrame) and frame.decision == "committed"
+    )
+    assert commit.deepgram_event == "is_final"
+
+
+def test_segment_final_without_vad_does_not_create_candidate():
+    async def run():
+        coordinator = CapturingEOTCoordinator(FakeSmartTurn(probability=0.9))
+        transcript = TranscriptionFrame(
+            "Background audio",
             "caller",
             "2026-09-19T00:00:00Z",
             result=SimpleNamespace(speech_final=False),

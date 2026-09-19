@@ -32,6 +32,7 @@ DEEPGRAM_DISCONNECT_TIMEOUT_SECONDS = 2
 DEEPGRAM_MODEL = "nova-3-general"
 DEEPGRAM_ENDPOINTING_MS = 1_500
 DEEPGRAM_EOT_GRACE_SECONDS = 0.7
+SMART_TURN_INCOMPLETE_TIMEOUT_SECONDS = 5
 SMART_TURN_COMPLETE_THRESHOLD = 0.5
 SMART_TURN_AUDIO_SECONDS = 8
 
@@ -52,6 +53,8 @@ class _PendingEOT:
     direction: FrameDirection
     candidate_at: float
     vad_state: str
+    deepgram_event: str
+    transcript_emitted: bool = False
     task: asyncio.Task | None = None
     smart_turn_probability: float | None = None
 
@@ -72,11 +75,19 @@ class BoundedDeepgramSTTService(DeepgramSTTService):
 
 
 class DeepgramEOTCoordinator(FrameProcessor):
-    def __init__(self, smart_turn: BaseTurnAnalyzer | None = None):
+    def __init__(
+        self,
+        smart_turn: BaseTurnAnalyzer | None = None,
+        *,
+        incomplete_timeout_seconds: float = SMART_TURN_INCOMPLETE_TIMEOUT_SECONDS,
+    ):
         super().__init__()
         self._smart_turn = smart_turn or LocalSmartTurnAnalyzerV3()
+        self._incomplete_timeout_seconds = incomplete_timeout_seconds
         self._pending_eot: _PendingEOT | None = None
+        self._segment_final: tuple[TranscriptionFrame, FrameDirection] | None = None
         self._vad_user_speaking = False
+        self._has_vad_activity = False
         self._audio_chunks: deque[tuple[bytes, bool]] = deque()
         self._audio_bytes = 0
         self._sample_rate = 16_000
@@ -97,21 +108,37 @@ class DeepgramEOTCoordinator(FrameProcessor):
             self._append_audio(frame)
         elif isinstance(frame, VADUserStartedSpeakingFrame):
             self._vad_user_speaking = True
+            self._has_vad_activity = True
             self._smart_turn.update_vad_start_secs(frame.start_secs)
             if self._pending_eot:
                 self._pending_eot.vad_state = "speaking"
             await self._cancel_pending_eot("vad_resumed")
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._vad_user_speaking = False
+            await self.push_frame(frame, direction)
+            await self._start_segment_candidate()
+            return
         elif self._pending_eot and isinstance(
             frame, (InterimTranscriptionFrame, TranscriptionFrame)
         ):
             await self._cancel_pending_eot("new_transcript")
 
+        if isinstance(frame, InterimTranscriptionFrame):
+            self._segment_final = None
+
         if isinstance(frame, TranscriptionFrame) and getattr(
             frame.result, "speech_final", False
         ):
-            await self._start_candidate(frame, direction)
+            self._segment_final = None
+            await self._start_candidate(frame, direction, "speech_final")
+            return
+
+        if isinstance(frame, TranscriptionFrame) and self._has_vad_activity:
+            if self._vad_user_speaking:
+                self._segment_final = (frame, direction)
+                await self.push_frame(frame, direction)
+            else:
+                await self._start_candidate(frame, direction, "is_final")
             return
 
         await self.push_frame(frame, direction)
@@ -131,7 +158,12 @@ class DeepgramEOTCoordinator(FrameProcessor):
             self._audio_bytes -= len(audio)
 
     async def _start_candidate(
-        self, transcript: TranscriptionFrame, direction: FrameDirection
+        self,
+        transcript: TranscriptionFrame,
+        direction: FrameDirection,
+        deepgram_event: str,
+        *,
+        transcript_emitted: bool = False,
     ) -> None:
         vad_state = "speaking" if self._vad_user_speaking else "quiet"
         pending = _PendingEOT(
@@ -139,6 +171,8 @@ class DeepgramEOTCoordinator(FrameProcessor):
             direction=direction,
             candidate_at=asyncio.get_running_loop().time(),
             vad_state=vad_state,
+            deepgram_event=deepgram_event,
+            transcript_emitted=transcript_emitted,
         )
         self._pending_eot = pending
         await self._emit_eot_event(pending, decision="candidate")
@@ -161,18 +195,38 @@ class DeepgramEOTCoordinator(FrameProcessor):
             or probability is None
             or probability <= SMART_TURN_COMPLETE_THRESHOLD
         ):
-            await self._cancel_pending_eot("smart_turn_incomplete")
-            return
+            await self._emit_eot_event(
+                pending,
+                decision="deferred",
+                cancellation_reason="smart_turn_incomplete",
+            )
+            await self._wait_until_candidate_age(
+                pending, self._incomplete_timeout_seconds
+            )
+        else:
+            await self._wait_until_candidate_age(pending, DEEPGRAM_EOT_GRACE_SECONDS)
 
-        grace_remaining = (
-            pending.candidate_at
-            + DEEPGRAM_EOT_GRACE_SECONDS
-            - asyncio.get_running_loop().time()
-        )
-        if grace_remaining > 0:
-            await asyncio.sleep(grace_remaining)
         if self._pending_eot is pending:
             await self._commit_eot(pending)
+
+    @staticmethod
+    async def _wait_until_candidate_age(pending: _PendingEOT, seconds: float) -> None:
+        remaining = pending.candidate_at + seconds - asyncio.get_running_loop().time()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+    async def _start_segment_candidate(self) -> None:
+        segment_final = self._segment_final
+        self._segment_final = None
+        if segment_final is None:
+            return
+        transcript, direction = segment_final
+        await self._start_candidate(
+            transcript,
+            direction,
+            "is_final",
+            transcript_emitted=True,
+        )
 
     async def _analyze_smart_turn(self):
         audio_snapshot = list(self._audio_chunks)
@@ -186,7 +240,10 @@ class DeepgramEOTCoordinator(FrameProcessor):
         pending.transcript.finalized = True
         await self._emit_eot_event(pending, decision="committed")
         await self.push_frame(UserStoppedSpeakingFrame(), pending.direction)
-        await self.push_frame(pending.transcript, pending.direction)
+        if not pending.transcript_emitted:
+            await self.push_frame(pending.transcript, pending.direction)
+        self._segment_final = None
+        self._has_vad_activity = False
         self._audio_chunks.clear()
         self._audio_bytes = 0
         self._smart_turn.clear()
@@ -213,7 +270,7 @@ class DeepgramEOTCoordinator(FrameProcessor):
             decision="cancelled",
             cancellation_reason=reason,
         )
-        if emit_transcript:
+        if emit_transcript and not pending.transcript_emitted:
             await self.push_frame(pending.transcript, pending.direction)
 
     async def _emit_eot_event(
@@ -238,6 +295,7 @@ class DeepgramEOTCoordinator(FrameProcessor):
                 decision=decision,
                 smart_turn_probability=pending.smart_turn_probability,
                 cancellation_reason=cancellation_reason,
+                deepgram_event=pending.deepgram_event,
             ),
             pending.direction,
         )

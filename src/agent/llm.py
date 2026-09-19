@@ -70,6 +70,11 @@ class LLMClient:
         self.max_retries = max_retries
         self._clients: dict[tuple[str, str | None], OpenAI] = {}
 
+    def close(self) -> None:
+        for client in self._clients.values():
+            client.close()
+        self._clients.clear()
+
     def _get_client(self, model_id: str) -> OpenAI:
         cache_key = (model_id, self._base_url)
         cached = self._clients.get(cache_key)
