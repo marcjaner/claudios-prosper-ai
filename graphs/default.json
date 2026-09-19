@@ -1,0 +1,137 @@
+{
+  "entry": "identificar",
+  "nodes": [
+    {
+      "id": "identificar",
+      "prompt": "Averigua quién llama y búscalo con search_patients usando nombre completo, DNI, teléfono o fecha de nacimiento.\n- Si aparece, registra su identificador del directorio como patient_id y pasa a atender. Nunca uses un identificador que haya dicho el paciente.\n- Si no aparece en el directorio, registra caller_unknown=si y pasa a registrar.\n- Si describe una urgencia médica, escala de inmediato sin identificar a nadie.",
+      "tools": [
+        "search_patients",
+        "get_clinic_catalogue",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "patient_id",
+        "caller_unknown",
+        "appointment_id",
+        "slot_elegido"
+      ],
+      "position": {
+        "x": 0,
+        "y": 200
+      }
+    },
+    {
+      "id": "registrar",
+      "prompt": "Quien llama no está en el directorio. La respuesta es darle de alta, no una cita: recoge nombre, dos apellidos, DNI, fecha de nacimiento, teléfono, email y aseguradora, y envíalos con register_patient. Un paciente que no está en la ficha no puede reservar, así que no reserves nada después. Comprueba la letra del DNI con el paciente antes de enviarlo.",
+      "tools": [
+        "register_patient",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [],
+      "position": {
+        "x": 330,
+        "y": 40
+      }
+    },
+    {
+      "id": "atender",
+      "prompt": "Ya sabes quién llama. Averigua qué necesita y si la clínica puede hacerlo.\n- Consulta get_clinic_catalogue para los identificadores y las restricciones reales.\n- Para una cita nueva: busca con search_availability y, cuando el paciente acepte una hora concreta que haya devuelto la clínica, registra slot_elegido con esa hora exacta y su zona horaria, y pasa a reservar.\n- Para cambiar o anular: usa get_patient_appointments, registra appointment_id de la cita afectada y pasa a modificar. Solo las citas futuras se pueden tocar.\n- Si una norma de la clínica lo impide, no busques excusas: envía submit_no_action con el motivo exacto que corresponda.\n- Si llama por otra persona distinta, vuelve a identificar.",
+      "tools": [
+        "get_clinic_catalogue",
+        "get_patient_appointments",
+        "search_availability",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "appointment_id",
+        "slot_elegido"
+      ],
+      "position": {
+        "x": 330,
+        "y": 200
+      }
+    },
+    {
+      "id": "reservar",
+      "prompt": "Confirma la cita con book_appointment. Todos los identificadores (provider_id, location_id, appointment_type_id, policy_id) y el hueco deben venir de lo que devolvió la clínica, nunca inventados. policy_id es el plan del paciente que cubre justo esta cita: si tiene dos, elige el que la cubre. Si al final no se puede reservar, envía submit_no_action con el motivo.",
+      "tools": [
+        "book_appointment",
+        "search_availability",
+        "get_clinic_catalogue",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [],
+      "position": {
+        "x": 680,
+        "y": 120
+      }
+    },
+    {
+      "id": "modificar",
+      "prompt": "Cambia o anula la cita indicada.\n- Anular: cancel_appointment con el appointment_id.\n- Cambiar: busca antes un hueco real con search_availability y envía reschedule_appointment con ese hueco y el plan que lo cubre.\nSi el paciente pide varias cosas, envía una acción por cada una.",
+      "tools": [
+        "cancel_appointment",
+        "reschedule_appointment",
+        "search_availability",
+        "get_clinic_catalogue",
+        "get_patient_appointments",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [],
+      "position": {
+        "x": 680,
+        "y": 300
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "identificar",
+      "to": "registrar",
+      "requires": [
+        "caller_unknown"
+      ]
+    },
+    {
+      "from": "identificar",
+      "to": "atender",
+      "requires": [
+        "patient_id"
+      ]
+    },
+    {
+      "from": "atender",
+      "to": "reservar",
+      "requires": [
+        "slot_elegido"
+      ]
+    },
+    {
+      "from": "atender",
+      "to": "modificar",
+      "requires": [
+        "appointment_id"
+      ]
+    },
+    {
+      "from": "reservar",
+      "to": "atender",
+      "requires": []
+    },
+    {
+      "from": "modificar",
+      "to": "atender",
+      "requires": []
+    },
+    {
+      "from": "atender",
+      "to": "identificar",
+      "requires": []
+    }
+  ]
+}

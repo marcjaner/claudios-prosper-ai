@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import Builder from "./Builder.jsx";
 import CallDetail from "./CallDetail.jsx";
 import History from "./History.jsx";
 import Sparkline from "./Sparkline.jsx";
@@ -9,6 +10,7 @@ import { useLiveCalls } from "./useLiveCalls.js";
 const VIEWS = {
   "#/wall": { label: "Wall", component: Wall },
   "#/historico": { label: "Histórico", component: History },
+  "#/builder": { label: "Agente", component: Builder },
 };
 const DEFAULT_VIEW = "#/wall";
 
