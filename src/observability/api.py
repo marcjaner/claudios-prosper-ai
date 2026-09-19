@@ -40,6 +40,29 @@ def register_dashboard(app: FastAPI) -> None:
             )
         }
 
+    @app.get("/api/histogram")
+    async def histogram(
+        request: Request,
+        outcome: str | None = None,
+        reason: str | None = None,
+        q: str | None = None,
+        ended_only: bool = False,
+        name: str | None = None,
+        insurer: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict:
+        return request.app.state.store.histogram(
+            outcome=outcome,
+            reason=reason,
+            search=q,
+            ended_only=ended_only,
+            name=name,
+            insurer=insurer,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
     @app.get("/api/stats")
     async def stats(request: Request) -> dict:
         return request.app.state.store.stats()

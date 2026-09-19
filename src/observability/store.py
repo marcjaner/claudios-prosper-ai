@@ -15,6 +15,16 @@ DAY_SECONDS = 24 * 60 * 60
 # finals are the transcript, and skipping the partials drops most of the writes.
 BROADCAST_ONLY = frozenset({"stt_partial"})
 
+# A call either changed the diary, closed with a reasoned record, or left
+# nothing behind. Only the last always fails the case, so they are counted
+# apart: a refusal with the right reason scores exactly like a booking.
+WROTE = ("BOOK", "RESCHEDULE", "CANCEL", "REGISTER")
+CLOSED = ("NO_ACTION", "ESCALATE")
+
+# Bar widths that read as time: a minute, five, a quarter, an hour, six, a day.
+BUCKET_LADDER = (60, 300, 900, 3600, 6 * 3600, DAY_SECONDS)
+BUCKET_TARGET = 40
+
 # What a person actually said or heard, and so what history search covers.
 SPOKEN_KINDS = ("stt_final", "llm", "tts")
 
@@ -145,10 +155,8 @@ class Store:
         connection.row_factory = sqlite3.Row
         return connection
 
-    def list_calls(
+    def _where(
         self,
-        limit: int = 200,
-        offset: int = 0,
         outcome: str | None = None,
         reason: str | None = None,
         search: str | None = None,
@@ -157,7 +165,8 @@ class Store:
         insurer: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
-    ) -> list[dict]:
+    ) -> tuple[str, list]:
+        """The filter the table and the histogram share, so they cannot drift."""
         clauses, params = [], []
         # The wall owns calls in flight; history is what already finished.
         if ended_only:
@@ -192,7 +201,10 @@ class Store:
             )
             params.extend([*SPOKEN_KINDS, f"%{search}%"])
 
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        return f"WHERE {' AND '.join(clauses)}" if clauses else "", params
+
+    def list_calls(self, limit: int = 200, offset: int = 0, **filters) -> list[dict]:
+        where, params = self._where(**filters)
         with self._read() as connection:
             rows = connection.execute(
                 f"SELECT * FROM calls {where} "
@@ -200,6 +212,36 @@ class Store:
                 (*params, limit, offset),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def histogram(self, buckets: int = BUCKET_TARGET, **filters) -> dict:
+        """Calls over time, split by what the call left behind.
+
+        A write and a reasoned close both score; leaving no record at all is
+        the only outcome that always fails, so the three are counted apart.
+        """
+        where, params = self._where(**filters)
+        with self._read() as connection:
+            span = connection.execute(
+                f"SELECT MIN(started_at) AS first, MAX(started_at) AS last "
+                f"FROM calls {where}",
+                params,
+            ).fetchone()
+            if span["first"] is None:
+                return {"bucket_seconds": BUCKET_LADDER[0], "buckets": []}
+
+            bucket = _pick_bucket(span["last"] - span["first"], buckets)
+            rows = connection.execute(
+                f"SELECT CAST(started_at / ? AS INTEGER) * ? AS bucket, "
+                # COALESCE, not a bare IN: SQL's three-valued logic makes
+                # `NULL IN (...)` itself NULL, and a bucket of calls that
+                # submitted nothing would sum to NULL instead of zero.
+                f"SUM(COALESCE(outcome, '') IN ({_marks(WROTE)})) AS wrote, "
+                f"SUM(COALESCE(outcome, '') IN ({_marks(CLOSED)})) AS closed, "
+                f"SUM(COALESCE(outcome, '') NOT IN ({_marks(WROTE + CLOSED)})) AS absent "
+                f"FROM calls {where} GROUP BY bucket ORDER BY bucket",
+                (bucket, bucket, *WROTE, *CLOSED, *WROTE, *CLOSED, *params),
+            ).fetchall()
+        return {"bucket_seconds": bucket, "buckets": [dict(row) for row in rows]}
 
     def stats(self) -> dict:
         with self._read() as connection:
@@ -269,3 +311,14 @@ def _day_start(day: str) -> float:
     return datetime.combine(
         date.fromisoformat(day), clock.min, tzinfo=CLINIC_TIMEZONE
     ).timestamp()
+
+
+def _marks(values: tuple[str, ...]) -> str:
+    return ", ".join("?" * len(values))
+
+
+def _pick_bucket(span_seconds: float, target: int) -> int:
+    for bucket in BUCKET_LADDER:
+        if span_seconds / bucket <= target:
+            return bucket
+    return BUCKET_LADDER[-1]

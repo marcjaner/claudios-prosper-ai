@@ -246,3 +246,86 @@ def test_history_filters_by_day_in_clinic_time(store):
     # date_to is inclusive of its whole day, so a call at 23:30 still counts.
     assert sorted(c["call_id"] for c in same_day) == ["EARLY", "LATE"]
     assert len(store.list_calls(date_from="2026-09-18")) == 3
+
+
+def test_histogram_counts_a_reasoned_close_as_a_record(store):
+    # NO_ACTION with a reason scores like a booking; only an empty record
+    # always fails. Colouring them alike would misread a passing run.
+    base = datetime(2026, 9, 19, 10, 0, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                "A", {"started_at": base, "ended_at": base + 1, "outcome": "BOOK"}
+            ),
+            CallUpdate(
+                "B",
+                {
+                    "started_at": base + 60,
+                    "ended_at": base + 61,
+                    "outcome": "NO_ACTION",
+                    "reason": "no_availability",
+                },
+            ),
+            CallUpdate(
+                "C",
+                {
+                    "started_at": base + 120,
+                    "ended_at": base + 121,
+                    "outcome": "ESCALATE",
+                    "reason": "medical_emergency",
+                },
+            ),
+            CallUpdate("D", {"started_at": base + 180, "ended_at": base + 181}),
+        ]
+    )
+    totals = store.histogram()["buckets"]
+    assert sum(b["wrote"] for b in totals) == 1
+    assert sum(b["closed"] for b in totals) == 2
+    assert sum(b["absent"] for b in totals) == 1
+
+
+def test_histogram_buckets_widen_with_the_span(store):
+    base = datetime(2026, 9, 19, 10, 0, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                f"C{i}", {"started_at": base + i * 30, "ended_at": base + i * 30 + 1}
+            )
+            for i in range(10)
+        ]
+    )
+    assert store.histogram()["bucket_seconds"] == 60
+
+    store.write(
+        [CallUpdate("FAR", {"started_at": base + 40 * 3600, "ended_at": base + 1})]
+    )
+    # Forty hours cannot be drawn in one-minute bars, so the ladder steps up.
+    assert store.histogram()["bucket_seconds"] > 60
+
+
+def test_histogram_honours_the_same_filters_as_the_table(store):
+    base = datetime(2026, 9, 19, 10, 0, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                "A",
+                {
+                    "started_at": base,
+                    "ended_at": base + 1,
+                    "outcome": "BOOK",
+                    "insurer": "sanitas",
+                },
+            ),
+            CallUpdate(
+                "B",
+                {
+                    "started_at": base + 60,
+                    "ended_at": base + 61,
+                    "outcome": "BOOK",
+                    "insurer": "adeslas",
+                },
+            ),
+        ]
+    )
+    only = store.histogram(insurer="sanitas")["buckets"]
+    assert sum(b["wrote"] for b in only) == 1

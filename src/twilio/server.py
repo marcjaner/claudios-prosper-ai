@@ -9,9 +9,10 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from loguru import logger
+from sqlalchemy.engine import make_url
+
 from observability import EventBus, Store, set_bus
 from observability.api import register_dashboard
-from sqlalchemy.engine import make_url
 
 from .transport import AgentFactory, run_call
 
