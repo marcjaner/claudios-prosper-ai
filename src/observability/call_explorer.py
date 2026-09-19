@@ -400,9 +400,9 @@ PAGE = r"""<!doctype html>
     .phase-llm { --phase:#ffc86a; } .phase-tool { --phase:#ed94c8; }
     .phase-agent { --phase:#8ef0b5; } .phase-tts { --phase:#d6f57a; }
     .phase-caller_wait { --phase:#56615d; }
-    .audio-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin-bottom:20px; }
-    .audio { padding:10px; border:1px solid var(--line); background:var(--panel); }
-    audio { width:100%; height:32px; margin-top:7px; }
+    .recording-player { position:sticky; top:0; z-index:4; display:grid; grid-template-columns:minmax(170px,.55fr) minmax(300px,1.45fr); align-items:center; gap:18px; margin:20px 0; padding:11px 14px; border:1px solid #34413b; background:#101614f2; box-shadow:0 8px 24px #050706b8; backdrop-filter:blur(12px); }
+    .recording-title { margin-top:3px; color:var(--ink); font-size:11px; }
+    .recording-player audio { width:100%; height:34px; }
     section { margin-top:22px; }
     .section-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; }
     h3 { margin:0; color:#b8c3bd; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
@@ -428,7 +428,7 @@ PAGE = r"""<!doctype html>
     .raw-time { width:72px; color:var(--muted); font-size:10px; }
     .source { color:#59645f; font-size:9px; }
     .json-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-    @media (max-width:850px) { .shell { grid-template-columns:1fr; height:auto; } aside { height:42vh; border-right:0; border-bottom:1px solid var(--line); } main { min-height:58vh; } .summary { grid-template-columns:1fr 1fr; } .payloads,.json-grid { grid-template-columns:1fr; } }
+    @media (max-width:850px) { .shell { grid-template-columns:1fr; height:auto; } aside { height:42vh; border-right:0; border-bottom:1px solid var(--line); } main { min-height:58vh; } .summary { grid-template-columns:1fr 1fr; } .recording-player,.payloads,.json-grid { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -573,7 +573,17 @@ PAGE = r"""<!doctype html>
       const open = new Set([...document.querySelectorAll('details[open][data-open-key]')].map((node) => node.dataset.openKey));
       const call = body.call;
       const metrics = call.metrics ?? body.recording_metadata?.metrics ?? {};
-      const audio = body.audio.map((name) => `<div class="audio"><div class="label">${esc(name.replace('.wav',''))}</div><audio controls preload="none" src="${basePath}/api/calls/${encodeURIComponent(call.call_id)}/audio/${name}"></audio></div>`).join('');
+      const currentAudio = $('#mixed-audio');
+      const playback = currentAudio?.dataset.callId === call.call_id ? {
+        time: currentAudio.currentTime,
+        paused: currentAudio.paused,
+        rate: currentAudio.playbackRate,
+        volume: currentAudio.volume,
+      } : null;
+      const mixedAudio = body.audio.includes('mixed.wav') ? `<div class="recording-player">
+        <div><div class="label">Call recording</div><div class="recording-title">Mixed caller + agent · scrub to any timestamp</div></div>
+        <audio id="mixed-audio" data-call-id="${esc(call.call_id)}" controls preload="metadata" src="${basePath}/api/calls/${encodeURIComponent(call.call_id)}/audio/mixed.wav"></audio>
+      </div>` : '';
       const submissions = body.submissions.map((item, index) => {
         const failed = Number(item.status) >= 400;
         return `<details class="${failed ? 'failed' : ''}" data-open-key="submission-${index}"><summary><span class="chevron"></span><span class="raw-time">${clock(item.ts)}</span><span class="tool-name">${esc(item.action)}</span><span class="status">${esc(item.status ?? '—')}</span></summary><div class="payloads"><div><div class="label">Request</div><pre>${pretty(item.request)}</pre></div><div><div class="label">Stored response</div><pre>${pretty(item.response)}</pre></div></div></details>`;
@@ -587,8 +597,8 @@ PAGE = r"""<!doctype html>
           <div class="metric"><div class="label">First audio</div><div class="value">${metrics.time_to_first_audio_seconds != null ? esc(metrics.time_to_first_audio_seconds + ' s') : '—'}</div></div>
           <div class="metric"><div class="label">Outcome</div><div class="value">${esc(call.outcome ?? call.final_outcome ?? call.recording_outcome ?? '—')}</div></div>
         </div>
+        ${mixedAudio}
         <section><div class="section-head"><h3>Latency waterfall</h3><span class="count">${body.latency.duration.toFixed(1)}s total · ${body.latency.limit}s limit</span></div>${renderLatency(body.latency)}</section>
-        ${audio ? `<section><div class="section-head"><h3>Recordings</h3><span class="count">${body.audio.length} tracks</span></div><div class="audio-grid">${audio}</div></section>` : ''}
         <section><div class="section-head"><h3>Conversation + tool calls</h3><span class="count">${body.agent_events.length} stored events</span></div><div class="stream">${renderFlow(body.agent_events)}</div></section>
         ${submissions ? `<section><div class="section-head"><h3>Tool submissions</h3><span class="count">${body.submissions.length}</span></div><div class="stream">${submissions}</div></section>` : ''}
         <section><div class="section-head"><h3>Raw pipeline timeline</h3><span><input id="raw-filter" class="raw-filter" value="${esc(timelineFilter)}" placeholder="Filter event type…"> <span class="count">${body.timeline.length} events</span></span></div><div id="raw" class="stream">${renderRaw(body.timeline)}</div></section>
@@ -596,6 +606,17 @@ PAGE = r"""<!doctype html>
       </div>`;
       document.querySelectorAll('details[data-open-key]').forEach((node) => node.open = open.has(node.dataset.openKey));
       $('#raw-filter').oninput = (event) => { timelineFilter = event.target.value; $('#raw').innerHTML = renderRaw(body.timeline); };
+      const restoredAudio = $('#mixed-audio');
+      if (restoredAudio && playback) {
+        const restorePlayback = () => {
+          restoredAudio.currentTime = playback.time;
+          restoredAudio.playbackRate = playback.rate;
+          restoredAudio.volume = playback.volume;
+          if (!playback.paused) restoredAudio.play().catch(() => {});
+        };
+        if (restoredAudio.readyState) restorePlayback();
+        else restoredAudio.addEventListener('loadedmetadata', restorePlayback, {once:true});
+      }
     }
 
     async function refreshCalls() {
