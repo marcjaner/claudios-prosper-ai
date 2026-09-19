@@ -424,6 +424,29 @@ def test_turn_no_action_records_reason_and_outcome(monkeypatch, bus):
     assert len(responses) == 2
 
 
+def test_immediate_response_can_be_skipped_before_tts(monkeypatch, bus):
+    monkeypatch.setenv("SEND_IMMEDIATE_RESPONSES", "false")
+    responses, repository, _graph = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="Let me check.",
+            tool_calls=[
+                ToolCall(
+                    name="submit_no_action",
+                    arguments={"reason": "no_availability"},
+                )
+            ],
+        ),
+        FakeClinicApi(),
+    )
+
+    assert [response.immediate_answer for response in responses] == ["Hecho."]
+    assert not any(
+        event == "agent_response" and payload["text"] == "Let me check."
+        for _, event, payload in repository.events
+    )
+
+
 def test_turn_book_is_blocked_before_identification(monkeypatch, bus):
     """The entry stage has no booking tool, so the call never reaches Prosper."""
     responses, repository, _graph = run_turn(

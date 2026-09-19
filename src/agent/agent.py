@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -415,8 +416,11 @@ async def run_agent_turn(
             )
             batch = _plan_batch(completion, state, call_id, step)
             speech = _speech_for(completion, batch.refused)
-            spoke_this_step = bool(speech)
-            if speech:
+            should_speak = bool(speech) and (
+                not completion.tool_calls or _send_immediate_responses()
+            )
+            spoke_this_step = should_speak
+            if should_speak:
                 state.history.append(HistoryEntry(speaker="agent", text=speech))
                 await repository.append_event(call_id, "agent_response", {"text": speech})
                 yield AgentResponse(immediate_answer=speech, tool_calls=[])
@@ -451,6 +455,15 @@ async def run_agent_turn(
     finally:
         emit(call_id, "turn_finished", {"turn": state.turn, "stage": state.stage_id, "ending": ending})
         await asyncio.to_thread(api.close)
+
+
+def _send_immediate_responses() -> bool:
+    return os.getenv("SEND_IMMEDIATE_RESPONSES", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _remaining_seconds(initial: float | None, started_at: float) -> int | None:
