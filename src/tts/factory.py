@@ -7,6 +7,7 @@ its own API key. TTS_VOICE and TTS_LANGUAGE override the defaults.
 import os
 from collections.abc import Mapping
 
+from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
 
@@ -15,6 +16,12 @@ DEFAULT_PROVIDER = "cartesia"
 DEFAULT_LANGUAGE = "es"
 CARTESIA_MODEL = "sonic-3.6"
 DEEPGRAM_VOICE = "aura-2-nestor-es"
+# Deepgram picks the language through the voice, so following the caller means
+# swapping the voice. Both are Aura-2 customer-service voices.
+DEEPGRAM_VOICES = {
+    Language.ES: "aura-2-nestor-es",
+    Language.EN: "aura-2-arcas-en",
+}
 
 
 def create_tts(env: Mapping[str, str] | None = None) -> TTSService:
@@ -59,3 +66,21 @@ def _require(env: Mapping[str, str], key: str) -> str:
     if not value:
         raise ValueError(f"{key} is required. Add it to .env (see .env.example).")
     return value
+
+
+def language_settings(
+    language: Language, env: Mapping[str, str] | None = None
+) -> TTSSettings | None:
+    """What to change so the configured provider speaks `language`, or None when it cannot.
+
+    Cartesia voices are multilingual, so only the language moves. Deepgram
+    encodes the language in the voice name, so the voice moves instead — and a
+    language it has no voice for is left alone rather than paying a reconnect
+    for a setting the service would ignore.
+    """
+    env = os.environ if env is None else env
+    if env.get("TTS_PROVIDER", DEFAULT_PROVIDER).strip().lower() != "deepgram":
+        return TTSSettings(language=language)
+
+    voice = DEEPGRAM_VOICES.get(language)
+    return TTSSettings(voice=voice) if voice else None

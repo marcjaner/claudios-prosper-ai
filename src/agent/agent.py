@@ -13,8 +13,10 @@ from uuid import uuid4
 
 import yaml
 from pipecat.frames.frames import SystemFrame
+from pipecat.transcriptions.language import Language
 
 from agent.clinic_api import ClinicApi, ProsperApiError
+from agent.language import DEFAULT_LANGUAGE, phrases, reply_instruction
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
 from agent.stage_runtime import (
@@ -52,8 +54,6 @@ SENSITIVE_ARGUMENT_MARKERS = {
     "token",
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
-TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
-NO_ANSWER_FALLBACK = "Perdone, ¿puede repetirme lo que necesita?"
 SUBMISSIONS = {
     "register_patient": ("/api/v1/submit/register", "REGISTER"),
     "book_appointment": ("/api/v1/submit/book", "BOOK"),
@@ -97,7 +97,7 @@ def _agent_response(completion: ToolCompletion) -> AgentResponse:
     ]
     answer = completion.text.strip()
     if tool_calls and not answer:
-        answer = TOOL_ACKNOWLEDGEMENT
+        answer = phrases(DEFAULT_LANGUAGE).acknowledgement
     if not answer:
         raise ValueError("LLM returned neither text nor tool calls.")
     return AgentResponse(immediate_answer=answer, tool_calls=tool_calls)
@@ -382,6 +382,7 @@ async def run_agent_turn(
     *,
     event_sink: EventSink | None = None,
     state: CallGraph | None = None,
+    language: Language = DEFAULT_LANGUAGE,
 ):
     """Run one caller turn as a bounded loop over the call's stage graph."""
     configure_logging()
@@ -399,10 +400,13 @@ async def run_agent_turn(
         tools = load_tools(create_clinic_tools(api, call_id))
         for step in range(1, MAX_ACTION_STEPS + 1):
             completion = await _observed_tool_completion(
-                _graph_prompt(state), llm_client, _offered_tools(state, tools), event_sink
+                _graph_prompt(state, language),
+                llm_client,
+                _offered_tools(state, tools),
+                event_sink,
             )
             batch = _plan_batch(completion, state, call_id, step)
-            speech = _speech_for(completion, batch.refused)
+            speech = _speech_for(completion, batch.refused, language)
             spoke_this_step = bool(speech)
             if speech:
                 state.history.append(HistoryEntry(speaker="agent", text=speech))
@@ -424,7 +428,7 @@ async def run_agent_turn(
 
         # A turn that ends without speech leaves the caller listening to silence.
         if ending == "budget" or not spoke_this_step:
-            answer = await _final_answer(state, llm_client, event_sink)
+            answer = await _final_answer(state, llm_client, event_sink, language)
             state.history.append(HistoryEntry(speaker="agent", text=answer))
             await repository.append_event(call_id, "agent_follow_up", {"text": answer})
             yield AgentResponse(immediate_answer=answer, tool_calls=[])
@@ -436,8 +440,11 @@ async def run_agent_turn(
         await asyncio.to_thread(api.close)
 
 
-def _graph_prompt(state: CallGraph) -> str:
-    return f"System prompt:\n{_system_prompt()}\n\n{render_context(state)}"
+def _graph_prompt(state: CallGraph, language: Language = DEFAULT_LANGUAGE) -> str:
+    return (
+        f"System prompt:\n{_system_prompt()}\n{reply_instruction(language)}\n\n"
+        f"{render_context(state)}"
+    )
 
 
 def _offered_tools(state: CallGraph, tools: dict[str, Tool]) -> list[dict[str, Any]]:
@@ -450,7 +457,9 @@ def _offered_tools(state: CallGraph, tools: dict[str, Tool]) -> list[dict[str, A
     return offered
 
 
-def _speech_for(completion: ToolCompletion, refused: bool) -> str:
+def _speech_for(
+    completion: ToolCompletion, refused: bool, language: Language = DEFAULT_LANGUAGE
+) -> str:
     """A draft utterance is only safe once every operation in it was permitted."""
     if refused:
         return ""
@@ -462,7 +471,7 @@ def _speech_for(completion: ToolCompletion, refused: bool) -> str:
         if call.name not in (RECORD_FACTS_TOOL, GO_TO_TOOL)
     ]
     # Bookkeeping-only steps stay silent; a caller should never hear the graph working.
-    return TOOL_ACKNOWLEDGEMENT if business else ""
+    return phrases(language).acknowledgement if business else ""
 
 
 @dataclass
@@ -645,18 +654,21 @@ async def _run_tool(
 
 
 async def _final_answer(
-    state: CallGraph, client: LLMClient, event_sink: EventSink | None
+    state: CallGraph,
+    client: LLMClient,
+    event_sink: EventSink | None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
     response = await _observed_completion(
-        f"{_graph_prompt(state)}\n\n"
+        f"{_graph_prompt(state, language)}\n\n"
         "Answer the caller now using only what is above. Be concise, never mention "
         "internal tools or stages, and do not promise anything you have not already done.",
         client,
         event_sink,
     )
     # A structurally valid but blank answer would still leave the caller in silence.
-    return response.immediate_answer.strip() or NO_ANSWER_FALLBACK
+    return response.immediate_answer.strip() or phrases(language).no_answer
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:
