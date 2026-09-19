@@ -9,8 +9,10 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 from pipecat.frames.frames import SystemFrame
@@ -32,7 +34,13 @@ from agent.stage_runtime import (
     Operation,
     render_context,
 )
-from agent.tools import ClinicTools, SubmissionRecord, create_clinic_tools, load_tools
+from agent.tools import (
+    SUBMISSION_TOOL_NAMES,
+    ClinicTools,
+    SubmissionRecord,
+    create_clinic_tools,
+    load_tools,
+)
 from agent.utils import configure_logging
 from observability import emit, update_call
 from observability.frames import (
@@ -58,6 +66,7 @@ SENSITIVE_ARGUMENT_MARKERS = {
     "token",
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
+CLINIC_TIMEZONE = ZoneInfo("Europe/Madrid")
 GUARDRAIL_REFUSAL = (
     "I cannot help with that request. I can help you with your appointment."
 )
@@ -405,6 +414,7 @@ async def run_agent_turn(
     *,
     event_sink: EventSink | None = None,
     state: CallGraph | None = None,
+    seconds_remaining: float | None = None,
     language: Language = DEFAULT_LANGUAGE,
 ):
     """Run one caller turn as a bounded loop over the call's stage graph."""
@@ -424,6 +434,7 @@ async def run_agent_turn(
 
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
+    turn_started_at = time.monotonic()
     spoke_this_step = False
     ending = "waiting"
     try:
@@ -431,7 +442,14 @@ async def run_agent_turn(
         tools = load_tools(clinic_tools.functions())
         for step in range(1, MAX_ACTION_STEPS + 1):
             completion = await _observed_tool_completion(
-                _graph_prompt(state, language, guardrail_text),
+                _graph_prompt(
+                    state,
+                    language=language,
+                    guardrails=guardrail_text,
+                    seconds_remaining=_remaining_seconds(
+                        seconds_remaining, turn_started_at
+                    ),
+                ),
                 llm_client,
                 _offered_tools(state, tools),
                 event_sink,
@@ -471,8 +489,11 @@ async def run_agent_turn(
                     )
                     return
             speech = _speech_for(completion, batch.refused, language)
-            spoke_this_step = bool(speech)
-            if speech:
+            should_speak = bool(speech) and (
+                not completion.tool_calls or _send_immediate_responses()
+            )
+            spoke_this_step = should_speak
+            if should_speak:
                 state.history.append(HistoryEntry(speaker="agent", text=speech))
                 await repository.append_event(
                     call_id, "agent_response", {"text": speech}
@@ -503,7 +524,15 @@ async def run_agent_turn(
 
         # A turn that ends without speech leaves the caller listening to silence.
         if ending == "budget" or not spoke_this_step:
-            answer = await _final_answer(state, llm_client, event_sink, language)
+            answer = await _final_answer(
+                state,
+                llm_client,
+                event_sink,
+                language=language,
+                seconds_remaining=_remaining_seconds(
+                    seconds_remaining, turn_started_at
+                ),
+            )
             state.history.append(HistoryEntry(speaker="agent", text=answer))
             await repository.append_event(call_id, "agent_follow_up", {"text": answer})
             yield AgentResponse(immediate_answer=answer, tool_calls=[])
@@ -519,17 +548,63 @@ async def run_agent_turn(
         await asyncio.to_thread(api.close)
 
 
+def _send_immediate_responses() -> bool:
+    return os.getenv("SEND_IMMEDIATE_RESPONSES", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _remaining_seconds(initial: float | None, started_at: float) -> int | None:
+    if initial is None:
+        return None
+    return max(0, int(initial - (time.monotonic() - started_at)))
+
+
+def _with_call_budget(prompt: str, seconds_remaining: int | None) -> str:
+    if seconds_remaining is None:
+        return prompt
+    if seconds_remaining <= 20:
+        instruction = (
+            "Act immediately: submit only confirmed values; otherwise request "
+            "confirmation or all missing values."
+        )
+    elif seconds_remaining <= 45:
+        instruction = (
+            "Time is short. Gather all missing details at once and keep the mandatory "
+            "read-back concise."
+        )
+    else:
+        instruction = (
+            "Keep the shortest valid path. Group up to three related missing details "
+            "when that reduces unnecessary turns."
+        )
+    return (
+        f"{prompt}\n\nCall deadline: {seconds_remaining} seconds remain before the "
+        f"platform disconnects. {instruction} Never guess missing values."
+    )
+
+
 def _graph_prompt(
-    state: CallGraph, language: Language = DEFAULT_LANGUAGE, guardrails: str = ""
+    state: CallGraph,
+    language: Language = DEFAULT_LANGUAGE,
+    guardrails: str = "",
+    seconds_remaining: int | None = None,
 ) -> str:
     guardrail_prompt = (
         f"\n\nConfigured guardrails (always follow):\n{guardrails}"
         if guardrails
         else ""
     )
-    return (
-        f"System prompt:\n{state.graph.system}\n{reply_instruction(language)}{guardrail_prompt}\n\n"
-        f"{render_context(state)}"
+    current_date = datetime.now(CLINIC_TIMEZONE).date().isoformat()
+    return _with_call_budget(
+        f"System prompt:\n{state.graph.system}\n{reply_instruction(language)}"
+        f"{guardrail_prompt}\n\n"
+        f"Current date in Europe/Madrid: {current_date}\n\n"
+        f"{render_context(state)}",
+        seconds_remaining,
     )
 
 
@@ -785,16 +860,25 @@ async def _run_tool(
                 "error": f"the request failed with status {status}",
             },
         )
+        can_retry = (
+            call.name not in SUBMISSION_TOOL_NAMES
+            or isinstance(exc, (TypeError, ValueError, LookupError))
+            or (isinstance(exc, ProsperApiError) and call.name != "confirm_action")
+        )
+        output = _tool_error_output(exc, can_retry=can_retry)
         await repository.append_event(
-            call_id, "tool_result", {"name": call.name, "output": f"Tool error: {exc}"}
+            call_id, "tool_result", {"name": call.name, "output": output}
         )
         await _record_submission(repository, call_id, clinic_tools.take_submission())
         await _save_state(repository, call_id, state)
-        # The request may still have been received, so this turn will not repeat it.
-        state.failed_tools.add(call.name)
+        if not can_retry:
+            state.failed_tools.add(call.name)
         # The model sees that it failed, never the provider's own words.
         return Operation(
-            call.name, call.arguments, "failed", detail="the request did not complete"
+            call.name,
+            call.arguments,
+            "failed",
+            detail=json.dumps(output, ensure_ascii=False),
         )
 
     await _emit(
@@ -927,10 +1011,11 @@ async def _final_answer(
     client: LLMClient,
     event_sink: EventSink | None,
     language: Language = DEFAULT_LANGUAGE,
+    seconds_remaining: int | None = None,
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
     response = await _observed_completion(
-        f"{_graph_prompt(state, language)}\n\n"
+        f"{_graph_prompt(state, language, seconds_remaining=seconds_remaining)}\n\n"
         "Answer the caller now using only what is above. Be concise, never mention "
         "internal tools or stages, and do not promise anything you have not already done.",
         client,
@@ -938,6 +1023,42 @@ async def _final_answer(
     )
     # A structurally valid but blank answer would still leave the caller in silence.
     return response.immediate_answer.strip() or phrases(language).no_answer
+
+
+def _tool_error_output(error: Exception, *, can_retry: bool) -> dict[str, Any]:
+    if isinstance(error, ProsperApiError):
+        return {
+            "ok": False,
+            "error": "Prosper rejected the tool arguments.",
+            "status_code": error.status_code,
+            "detail": error.detail,
+            "instruction": (
+                "Correct the arguments using the tool schema and call the tool again."
+                if can_retry
+                else "Do not retry this submission. Correct the request and prepare a new action."
+            ),
+        }
+    if isinstance(error, (TypeError, ValueError, LookupError)):
+        return {
+            "ok": False,
+            "error": type(error).__name__,
+            "detail": str(error),
+            "instruction": (
+                "Correct the arguments using the tool schema and call the tool again."
+            ),
+        }
+    instruction = (
+        "Retry once. If it fails again, tell the caller the request cannot be completed "
+        "right now."
+        if can_retry
+        else "Do not retry because the action may already have been received."
+    )
+    return {
+        "ok": False,
+        "error": type(error).__name__,
+        "detail": "The tool failed unexpectedly; no private error details are exposed.",
+        "instruction": instruction,
+    }
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:

@@ -25,8 +25,8 @@ PIPELINE_SAMPLE_RATE = 16_000
 TTS_SAMPLE_RATE = 24_000
 # 20 ms out, matching the frames the harness sends in.
 AUDIO_OUT_10MS_CHUNKS = 2
-IDLE_TIMEOUT_SECONDS = 300
-MAX_CALL_SECONDS = 300
+IDLE_TIMEOUT_SECONDS = 720
+MAX_CALL_SECONDS = 720
 
 # Builds the processors between transport input and output: STT, turn
 # detection, the agent, TTS. Called once per call; nothing it returns is shared.

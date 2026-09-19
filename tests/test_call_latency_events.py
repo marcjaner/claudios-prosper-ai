@@ -37,6 +37,12 @@ class FakeRepository:
         self.submissions = []
         self.workflow = {}
 
+    async def seed_default_guardrails(self):
+        return None
+
+    async def list_guardrails(self):
+        return []
+
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
 
@@ -51,12 +57,6 @@ class FakeRepository:
 
     async def record_submission(self, *arguments):
         self.submissions.append(arguments)
-
-    async def seed_default_guardrails(self):
-        pass
-
-    async def list_guardrails(self):
-        return []
 
 
 class FakeClinicApi:
@@ -332,6 +332,7 @@ def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch)
     monkeypatch.setattr(
         ClinicApi, "from_environment", classmethod(lambda cls: clinic_api)
     )
+    repository = FakeRepository()
 
     async def run():
         frames = []
@@ -343,7 +344,7 @@ def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch)
         async for response in run_agent_turn(
             "Hello",
             "CA456",
-            cast(CallRepository, FakeRepository()),
+            cast(CallRepository, repository),
             cast(
                 LLMClient,
                 FakeLLMClient(
@@ -381,6 +382,12 @@ def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch)
         "Let me check.",
         "Sorry, I could not look that up.",
     ]
+    tool_result = next(
+        payload for _, event, payload in repository.events if event == "tool_result"
+    )
+    assert tool_result["output"]["ok"] is False
+    assert "Retry once" in tool_result["output"]["instruction"]
+    assert "secret clinic details" not in str(tool_result)
     assert clinic_api.is_closed is True
 
 

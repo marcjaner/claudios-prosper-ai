@@ -1,4 +1,5 @@
 import logging
+import time
 
 from pipecat.frames.frames import Frame, LLMContextFrame, SystemFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -11,6 +12,7 @@ from .language import CallLanguage, phrases
 from .stage_runtime import CallGraph
 
 logger = logging.getLogger(__name__)
+CALL_LIMIT_SECONDS = 600
 
 
 class AgentReply(FrameProcessor):
@@ -24,6 +26,7 @@ class AgentReply(FrameProcessor):
         super().__init__()
         self.call_id = call_id
         self.repository = repository
+        self.started_at = time.monotonic()
         # Frozen for the call: saving in the builder must not move live ground.
         self.state = state or CallGraph.start(call_id=call_id)
         self.language = language or CallLanguage()
@@ -52,6 +55,9 @@ class AgentReply(FrameProcessor):
                 self.repository,
                 event_sink=self._emit_event,
                 state=self.state,
+                seconds_remaining=max(
+                    0, CALL_LIMIT_SECONDS - (time.monotonic() - self.started_at)
+                ),
                 language=language,
             ):
                 logger.info(

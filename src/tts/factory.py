@@ -13,9 +13,9 @@ from pipecat.transcriptions.language import Language
 
 PROVIDERS = ("cartesia", "deepgram")
 DEFAULT_PROVIDER = "cartesia"
-DEFAULT_LANGUAGE = "es"
+DEFAULT_LANGUAGE = "en"
 CARTESIA_MODEL = "sonic-3.6"
-DEEPGRAM_VOICE = "aura-2-nestor-es"
+DEEPGRAM_VOICE = "aura-2-arcas-en"
 # Deepgram picks the language through the voice, so following the caller means
 # swapping the voice. Both are Aura-2 customer-service voices.
 DEEPGRAM_VOICES = {

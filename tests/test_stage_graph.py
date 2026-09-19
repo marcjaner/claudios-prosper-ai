@@ -74,17 +74,17 @@ class FakeRepository:
         self.events: list[tuple[str, dict]] = []
         self.submissions: list[str] = []
 
+    async def seed_default_guardrails(self):
+        return None
+
+    async def list_guardrails(self):
+        return []
+
     async def append_event(self, _call_id, event_type, payload):
         self.events.append((event_type, payload))
 
     async def record_submission(self, _call_id, action, *_args):
         self.submissions.append(action)
-
-    async def seed_default_guardrails(self):
-        pass
-
-    async def list_guardrails(self):
-        return []
 
 
 def run_turn(prompt, state, client, repository, tool_outputs=None):

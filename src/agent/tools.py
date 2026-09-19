@@ -5,7 +5,8 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, get_args, get_origin, get_type_hints
+from enum import Enum
+from typing import Annotated, Any, Literal, get_args, get_origin, get_type_hints
 
 from .call_context import ActionProposal, CallContext
 from .clinic_api import ClinicApi, ProsperApiError
@@ -18,6 +19,73 @@ from .clinic_models import (
     RescheduleRequest,
 )
 from .models import Tool
+
+DateValue = Annotated[str, "ISO date in YYYY-MM-DD format."]
+AvailabilityStartDate = Annotated[
+    str,
+    "Inclusive search start in YYYY-MM-DD format. Never use a past or same-day date.",
+]
+AvailabilityEndDate = Annotated[
+    str,
+    "Inclusive search end in YYYY-MM-DD format. The range may contain at most 14 days.",
+]
+DateTimeValue = Annotated[
+    str,
+    "Exact ISO 8601 date-time returned by availability, including its timezone offset.",
+]
+PatientId = Annotated[str, "Exact patient_id returned by search_patients."]
+AppointmentId = Annotated[
+    str, "Exact appointment_id returned by get_patient_appointments."
+]
+ProviderId = Literal[
+    "PR01",
+    "PR02",
+    "PR03",
+    "PR04",
+    "PR05",
+    "PR06",
+    "PR07",
+    "PR08",
+    "PR09",
+    "PR10",
+    "PR11",
+    "PR12",
+]
+SpecialtyId = Literal[
+    "general_practice",
+    "paediatrics",
+    "dermatology",
+    "orthopaedics",
+    "gynaecology",
+    "physiotherapy",
+]
+LocationId = Literal["centro", "norte", "sur"]
+AppointmentTypeId = Literal[
+    "first_visit",
+    "review",
+    "paediatric_first_visit",
+    "paediatric_review",
+    "gynaecology_review",
+    "physiotherapy_assessment",
+    "physiotherapy_session",
+    "dermatology_first_visit",
+    "dermatology_review",
+    "orthopaedic_first_visit",
+    "orthopaedic_review",
+]
+InsurerId = Literal[
+    "sanitas",
+    "adeslas",
+    "dkv",
+    "asisa",
+    "mapfre",
+    "caser",
+    "cigna",
+    "axa",
+    "nueva_mutua",
+    "privado",
+]
+AppointmentWindow = Literal["upcoming", "past", "all"]
 
 
 @dataclass
@@ -63,7 +131,7 @@ class ClinicTools:
         name: str | None = None,
         national_id: str | None = None,
         phone: str | None = None,
-        date_of_birth: str | None = None,
+        date_of_birth: DateValue | None = None,
     ) -> dict[str, Any]:
         """Find a patient; exactly one match verifies its patient_id for this call."""
         response = self._api.search_patients(
@@ -81,8 +149,8 @@ class ClinicTools:
 
     def get_patient_appointments(
         self,
-        patient_id: str,
-        when: str = "upcoming",
+        patient_id: PatientId,
+        when: AppointmentWindow = "upcoming",
         request_id: str | None = None,
         new_request: bool = False,
     ) -> dict[str, Any]:
@@ -115,13 +183,13 @@ class ClinicTools:
 
     def search_availability(
         self,
-        date_from: str,
-        date_to: str,
-        patient_id: str,
-        provider_id: str | None = None,
-        specialty_id: str | None = None,
-        location_id: str | None = None,
-        insurers: list[str] | None = None,
+        date_from: AvailabilityStartDate,
+        date_to: AvailabilityEndDate,
+        patient_id: PatientId,
+        provider_id: ProviderId | None = None,
+        specialty_id: SpecialtyId | None = None,
+        location_id: LocationId | None = None,
+        insurers: list[InsurerId] | None = None,
         request_id: str | None = None,
         new_request: bool = False,
     ) -> dict[str, Any]:
@@ -163,10 +231,10 @@ class ClinicTools:
         first_surname: str,
         second_surname: str,
         national_id: str,
-        date_of_birth: str,
+        date_of_birth: DateValue,
         phone: str,
         email: str,
-        insurer: str,
+        insurer: InsurerId,
     ) -> dict[str, Any]:
         """Register a caller missing from the directory. Do not book them too."""
         request = RegisterPatientRequest(
@@ -182,12 +250,12 @@ class ClinicTools:
         )
         return self._submit_direct("REGISTER", request, self._api.register_patient)
 
-    def prepare_booking(self, slot_id: str, policy_id: str) -> dict[str, Any]:
+    def prepare_booking(self, slot_id: str, policy_id: InsurerId) -> dict[str, Any]:
         """Freeze a booking from stored slot evidence without submitting it."""
         return self._proposal_result(self._context.prepare_booking(slot_id, policy_id))
 
     def prepare_reschedule(
-        self, appointment_ref: str, slot_id: str, policy_id: str
+        self, appointment_ref: str, slot_id: str, policy_id: InsurerId
     ) -> dict[str, Any]:
         """Freeze a move from same-request appointment and slot evidence."""
         proposal = self._context.prepare_reschedule(appointment_ref, slot_id, policy_id)
@@ -327,7 +395,7 @@ def load_tools(functions: list[Callable[..., Any]]) -> dict[str, Tool]:
     loaded: dict[str, Tool] = {}
     for function in functions:
         function_name = getattr(function, "__name__", type(function).__name__)
-        hints = get_type_hints(function)
+        hints = get_type_hints(function, include_extras=True)
         properties = {
             name: _json_schema(hints.get(name, str))
             for name in inspect.signature(function).parameters
@@ -352,18 +420,28 @@ def load_tools(functions: list[Callable[..., Any]]) -> dict[str, Tool]:
 
 
 def _json_schema(annotation: Any) -> dict[str, Any]:
-    if annotation is str or annotation is OutcomeReason:
-        schema = {"type": "string"}
-        if annotation is OutcomeReason:
-            schema["enum"] = [reason.value for reason in OutcomeReason]
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        value_type, *metadata = get_args(annotation)
+        schema = _json_schema(value_type)
+        description = next((item for item in metadata if isinstance(item, str)), None)
+        if description:
+            schema["description"] = description
         return schema
+    if origin is Literal:
+        values = list(get_args(annotation))
+        return {"type": "string", "enum": values}
+    if annotation is str:
+        return {"type": "string"}
+    if inspect.isclass(annotation) and issubclass(annotation, Enum):
+        return {"type": "string", "enum": [item.value for item in annotation]}
     if annotation in (int, float):
         return {"type": "number"}
     if annotation is bool:
         return {"type": "boolean"}
-    if get_origin(annotation) is list:
+    if origin is list:
         return {"type": "array", "items": _json_schema(get_args(annotation)[0])}
-    if get_origin(annotation) is not None and type(None) in get_args(annotation):
+    if origin is not None and type(None) in get_args(annotation):
         return _json_schema(
             next(item for item in get_args(annotation) if item is not type(None))
         )

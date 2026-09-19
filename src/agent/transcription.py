@@ -3,7 +3,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import Frame, InterimTranscriptionFrame
+from pipecat.frames.frames import Frame, InterimTranscriptionFrame, TTSSpeakFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -14,6 +14,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from observability import emit, update_call
+from observability.frames import TTSRequestedFrame
 from storage import CallRepository, Database
 from stt import (
     DeepgramEndpointingStopStrategy,
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 USER_TURN_STOP_TIMEOUT_SECONDS = 6
+EMPTY_TURN_RECOVERY_MESSAGE = "Sorry, I didn't catch that. Could you repeat it?"
 # The greeting plays before the caller has said a word, so it is always the default.
 INITIAL_GREETING = phrases(DEFAULT_LANGUAGE).greeting
 
@@ -72,6 +74,14 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
             emit(meta.call_id, "stt_final", {"text": message.content})
             update_call(meta.call_id, state="thinking")
             await on_completed_turn(meta, message.content)
+            return
+        logger.warning("empty user turn | call_id=%s", meta.call_id)
+        await _aggregator.push_frame(
+            TTSRequestedFrame(EMPTY_TURN_RECOVERY_MESSAGE), FrameDirection.DOWNSTREAM
+        )
+        await _aggregator.push_frame(
+            TTSSpeakFrame(EMPTY_TURN_RECOVERY_MESSAGE), FrameDirection.DOWNSTREAM
+        )
 
     return aggregator
 
