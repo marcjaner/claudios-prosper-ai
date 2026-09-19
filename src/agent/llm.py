@@ -9,10 +9,11 @@ import os
 import time
 from typing import Any, Generic, TypeVar, cast
 
-from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
 from pydantic import BaseModel, ValidationError
+
+from agent.utils import load_environment
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -73,9 +74,10 @@ class LLMClient:
         cache_key = (model_id, self._base_url)
         cached = self._clients.get(cache_key)
         if cached is not None:
+            _logger.debug("Reusing cached LLM client for model=%s", model_id)
             return cached
 
-        load_dotenv()
+        load_environment()
         api_key = self._api_key or os.getenv("HELMCODE_API_KEY")
         if not api_key or api_key == "your-helmcode-api-key":
             raise RuntimeError("Set HELMCODE_API_KEY in .env before calling Helmcode.")
@@ -83,6 +85,7 @@ class LLMClient:
         base_url = self._base_url or os.getenv(
             "HELMCODE_BASE_URL", "https://api.helmcode.com/v1"
         )
+        _logger.info("Creating LLM client model=%s base_url=%s", model_id, base_url)
         client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -182,6 +185,7 @@ class LLMClient:
         """
         for attempt in range(self.max_retries + 1):
             try:
+                _logger.debug("Sending completion request model=%s attempt=%d", model, attempt + 1)
                 return client.chat.completions.create(**cast(Any, kwargs))
             except json.JSONDecodeError as exc:
                 if attempt >= self.max_retries:
@@ -220,7 +224,10 @@ class LLMClient:
         kwargs: Any = self._common_create_kwargs(
             prompt, resolved_model, temperature, max_tokens
         )
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         response = self._create_chat_completion(client, kwargs, model=resolved_model)
+        _logger.info("Received plain completion model=%s", resolved_model)
         message = response.choices[0].message
         text = message.content or ""
         return Completion(
@@ -246,6 +253,8 @@ class LLMClient:
         kwargs: Any = self._common_create_kwargs(
             prompt, resolved_model, temperature, max_tokens
         )
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         kwargs["response_format"] = {
             "type": "json_schema",
             "json_schema": {
@@ -256,6 +265,7 @@ class LLMClient:
         }
 
         response = self._create_chat_completion(client, kwargs, model=resolved_model)
+        _logger.info("Received structured completion model=%s schema=%s", resolved_model, schema.__name__)
         content = response.choices[0].message.content or ""
         try:
             data = schema.model_validate_json(content)
