@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -77,16 +78,35 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
 
 def create_transcription_agent(
     on_completed_turn: CompletedTurnCallback = log_completed_turn,
+    database: Database | None = None,
 ) -> AgentFactory:
+    database = database or Database()
+    repository = CallRepository(database)
+    database_init_lock = asyncio.Lock()
+    is_database_initialized = False
+
     async def build_agent(meta: CallMeta):
+        nonlocal is_database_initialized
         logger.info("building call pipeline | call_id=%s", meta.call_id)
-        database = Database()
-        await database.init()
-        repository = CallRepository(database)
+        if not is_database_initialized:
+            async with database_init_lock:
+                if not is_database_initialized:
+                    await database.init()
+                    is_database_initialized = True
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
         state = CallGraph.start()
         language = CallLanguage()
-        emit(meta.call_id, "stage_entered", {"turn": 0, "step": 0, "stage": state.stage_id, "from": None, "cleared": []})
+        emit(
+            meta.call_id,
+            "stage_entered",
+            {
+                "turn": 0,
+                "step": 0,
+                "stage": state.stage_id,
+                "from": None,
+                "cleared": [],
+            },
+        )
         processors = [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),

@@ -1,13 +1,15 @@
+import asyncio
 import json
 import os
 import re
 import time
+import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from pipecat.audio.utils import mix_audio, pcm_to_wav
+from pipecat.audio.utils import mix_audio
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -46,6 +48,7 @@ from .handshake import CallMeta
 
 RECORDINGS_DIR_VAR = "CALL_RECORDINGS_DIR"
 SCHEMA_VERSION = 1
+RECORDING_CHUNK_BYTES = 64 * 1024
 
 
 class CallTimelineObserver(BaseObserver):
@@ -248,6 +251,7 @@ class CallArtifacts:
         self._metadata_path = self.directory / "metadata.json"
         self._timeline_path = self.directory / "timeline.jsonl"
         self._timeline_path.write_text("", encoding="utf-8")
+        self._audio_writers = {}
         self.timeline = CallTimelineObserver(self._timeline_path, self._started_at_ns)
         self.recorder = self._create_recorder()
         self._write_metadata()
@@ -271,7 +275,8 @@ class CallArtifacts:
                 interrupted=interrupted,
             )
 
-    def finish(self, outcome: str, metrics: dict[str, Any]) -> None:
+    async def finish(self, outcome: str, metrics: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._close_audio_writers)
         self._write_metadata(
             finished_at=datetime.now(self._meta.connected_at.tzinfo).isoformat(),
             outcome=outcome,
@@ -279,14 +284,18 @@ class CallArtifacts:
         )
 
     def _create_recorder(self) -> AudioBufferProcessor:
-        recorder = AudioBufferProcessor(num_channels=2, auto_start_recording=True)
+        recorder = AudioBufferProcessor(
+            num_channels=2,
+            buffer_size=RECORDING_CHUNK_BYTES,
+            auto_start_recording=True,
+        )
 
         @recorder.event_handler("on_audio_data")
         async def _on_audio_data(
             _recorder, audio: bytes, sample_rate: int, num_channels: int
         ):
-            (self.directory / "stereo.wav").write_bytes(
-                pcm_to_wav(audio, sample_rate, num_channels)
+            await asyncio.to_thread(
+                self._write_audio, "stereo.wav", audio, sample_rate, num_channels
             )
 
         @recorder.event_handler("on_track_audio_data")
@@ -297,24 +306,52 @@ class CallArtifacts:
             sample_rate: int,
             _num_channels: int,
         ):
-            (self.directory / "caller.wav").write_bytes(
-                pcm_to_wav(caller_audio, sample_rate, 1)
-            )
-            (self.directory / "agent.wav").write_bytes(
-                pcm_to_wav(agent_audio, sample_rate, 1)
-            )
-            (self.directory / "mixed.wav").write_bytes(
-                pcm_to_wav(mix_audio(caller_audio, agent_audio), sample_rate, 1)
-            )
-            seconds = len(caller_audio) / (sample_rate * 2)
-            logger.info(
-                "call debug bundle written | call_id={} path={} seconds={:.1f}",
-                self._meta.call_id,
-                self.directory,
-                seconds,
+            await asyncio.to_thread(
+                self._write_tracks,
+                caller_audio,
+                agent_audio,
+                sample_rate,
             )
 
         return recorder
+
+    def _write_tracks(
+        self, caller_audio: bytes, agent_audio: bytes, sample_rate: int
+    ) -> None:
+        self._write_audio("caller.wav", caller_audio, sample_rate, 1)
+        self._write_audio("agent.wav", agent_audio, sample_rate, 1)
+        self._write_audio(
+            "mixed.wav", mix_audio(caller_audio, agent_audio), sample_rate, 1
+        )
+
+    def _write_audio(
+        self,
+        filename: str,
+        audio: bytes,
+        sample_rate: int,
+        num_channels: int,
+    ) -> None:
+        writer = self._audio_writers.get(filename)
+        if writer is None:
+            writer = wave.open(  # noqa: SIM115 - kept open for streaming chunks
+                str(self.directory / filename), "wb"
+            )
+            writer.setnchannels(num_channels)
+            writer.setsampwidth(2)
+            writer.setframerate(sample_rate)
+            self._audio_writers[filename] = writer
+        writer.writeframesraw(audio)
+
+    def _close_audio_writers(self) -> None:
+        for writer in self._audio_writers.values():
+            writer.close()
+        if self._audio_writers:
+            logger.info(
+                "call debug bundle written | call_id={} path={}",
+                self._meta.call_id,
+                self.directory,
+            )
+        self._audio_writers.clear()
 
     def _write_metadata(self, **updates: Any) -> None:
         metadata = {

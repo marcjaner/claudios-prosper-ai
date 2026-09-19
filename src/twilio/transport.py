@@ -77,7 +77,11 @@ class OutboundAudioTap(FrameProcessor):
             isinstance(frame, OutputAudioRawFrame)
             and direction == FrameDirection.DOWNSTREAM
         ):
-            logger.debug("outbound audio frame | call_id=%s bytes=%s", self._call_metrics.call_id, len(frame.audio))
+            logger.debug(
+                "outbound audio frame | call_id=%s bytes=%s",
+                self._call_metrics.call_id,
+                len(frame.audio),
+            )
             if self._call_metrics.first_audio_out_at is None:
                 self._call_metrics.first_audio_out_at = time.monotonic()
                 update_call(self._call_metrics.call_id, state="speaking")
@@ -201,7 +205,7 @@ async def run_call(
         if active_workers is not None and active_workers.get(meta.call_id) is worker:
             active_workers.pop(meta.call_id, None)
         if artifacts:
-            artifacts.finish(outcome, metrics.summary())
+            await artifacts.finish(outcome, metrics.summary())
         metrics.log()
         # Teardown runs under cancellation, so anything that must be recorded
         # belongs here rather than in a pipeline event handler.
