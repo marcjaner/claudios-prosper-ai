@@ -20,13 +20,16 @@ const splitKeys = (text) =>
 // React Flow derives edge ids from the endpoints, so renaming a stage and reusing
 // its old name produces two different edges sharing one id — and deleting one
 // would delete both. These ids are independent of the names.
+// Whole tool lists made nodes metres wide; the panel shows the rest.
+const CHIP_LIMIT = 4;
+
 let edgeSequence = 0;
 const nextEdgeId = () => `edge_${(edgeSequence += 1)}`;
 
 function StageNode({ id, data, selected }) {
   return (
     <div
-      className={`min-w-44 rounded-lg border px-3 py-2 text-left ${
+      className={`w-52 rounded-lg border px-3 py-2 text-left ${
         selected ? "border-emerald-400 bg-slate-800" : "border-slate-700 bg-slate-900"
       }`}
     >
@@ -43,11 +46,20 @@ function StageNode({ id, data, selected }) {
         <p className="mt-1 text-[11px] text-slate-600">sin herramientas</p>
       ) : (
         <div className="mt-1.5 flex flex-wrap gap-1">
-          {data.tools.map((tool) => (
-            <span key={tool} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+          {data.tools.slice(0, CHIP_LIMIT).map((tool) => (
+            <span
+              key={tool}
+              title={tool}
+              className="max-w-full truncate rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400"
+            >
               {tool}
             </span>
           ))}
+          {data.tools.length > CHIP_LIMIT && (
+            <span className="px-1 py-0.5 text-[10px] text-slate-600">
+              +{data.tools.length - CHIP_LIMIT}
+            </span>
+          )}
         </div>
       )}
       <Handle type="source" position={Position.Right} className="!bg-slate-500" />
@@ -86,16 +98,31 @@ const toFlowNodes = (graph) =>
     },
   }));
 
+// An arrow that also exists the other way round is a way back, not a duplicate:
+// it is drawn dashed and routed differently so the pair reads as two directions.
+const isReturn = (edge, all) =>
+  all.some((other) => other.from === edge.to && other.to === edge.from) &&
+  (edge.requires ?? []).length === 0;
+
+const edgeLook = (requires, back) => ({
+  // No requirements needs no words; the absence of a label already says it.
+  label: requires.join(", "),
+  type: back ? "smoothstep" : "default",
+  animated: false,
+  labelStyle: { fill: "#94a3b8", fontSize: 11 },
+  labelBgStyle: { fill: "#0f172a" },
+  style: back
+    ? { stroke: "#334155", strokeDasharray: "4 4" }
+    : { stroke: "#64748b" },
+});
+
 const toFlowEdges = (graph) =>
   graph.edges.map((edge) => ({
     id: nextEdgeId(),
     source: edge.from,
     target: edge.to,
-    label: (edge.requires ?? []).join(", ") || "sin requisitos",
     data: { requires: edge.requires ?? [] },
-    labelStyle: { fill: "#94a3b8", fontSize: 11 },
-    labelBgStyle: { fill: "#0f172a" },
-    style: { stroke: "#475569" },
+    ...edgeLook(edge.requires ?? [], isReturn(edge, graph.edges)),
   }));
 
 export default function Builder() {
@@ -128,11 +155,8 @@ export default function Builder() {
           {
             ...connection,
             id: nextEdgeId(),
-            label: "sin requisitos",
             data: { requires: [] },
-            labelStyle: { fill: "#94a3b8", fontSize: 11 },
-            labelBgStyle: { fill: "#0f172a" },
-            style: { stroke: "#475569" },
+            ...edgeLook([], false),
           },
           current,
         ),
@@ -148,9 +172,7 @@ export default function Builder() {
   const patchEdge = (id, requires) =>
     setEdges((current) =>
       current.map((edge) =>
-        edge.id === id
-          ? { ...edge, data: { requires }, label: requires.join(", ") || "sin requisitos" }
-          : edge,
+        edge.id === id ? { ...edge, data: { requires }, label: requires.join(", ") } : edge,
       ),
     );
 
@@ -286,6 +308,7 @@ export default function Builder() {
           }}
           onPaneClick={() => setSelected(null)}
           fitView
+          fitViewOptions={{ padding: 0.25 }}
           colorMode="dark"
         >
           <Background color="#1e293b" />

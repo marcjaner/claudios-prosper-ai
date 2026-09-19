@@ -444,3 +444,34 @@ def test_a_blank_final_answer_still_says_something():
                       {"search_patients": {"patients": [{"id": "P1"}]}})
 
     assert spoken[-1] == NO_ANSWER_FALLBACK
+
+
+def test_a_graph_that_loops_back_is_rejected():
+    """A call moves forward; a stage you can re-enter is a loop, not a flow."""
+    with pytest.raises(InvalidGraph):
+        parse_graph({
+            "entry": "identify",
+            "nodes": [IDENTIFY, BOOK],
+            "edges": [
+                {"from": "identify", "to": "book", "requires": []},
+                {"from": "book", "to": "identify", "requires": []},
+            ],
+        })
+
+
+def test_a_stage_cannot_point_at_itself():
+    with pytest.raises(InvalidGraph):
+        parse_graph({
+            "entry": "identify",
+            "nodes": [IDENTIFY],
+            "edges": [{"from": "identify", "to": "identify", "requires": []}],
+        })
+
+
+def test_the_shipped_graphs_are_forward_only():
+    from pathlib import Path
+
+    from agent.graph import load_graph
+
+    for name in ("default", "clinic"):
+        assert load_graph(Path(f"graphs/{name}.json")).nodes
