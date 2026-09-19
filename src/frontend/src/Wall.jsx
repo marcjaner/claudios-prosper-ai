@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import WallOverview from "./WallOverview.jsx";
+import { alertReason } from "./alertReason.js";
 
 // Every call is cut off at ten minutes, so duration is a countdown.
 const CALL_LIMIT_SECONDS = 600;
@@ -122,6 +123,7 @@ function CallCard({ call, events, now }) {
   const turnCount = score?.turn_count ?? 0;
   const hasScore = typeof call.score_overall === "number";
   const alert = Boolean(call.guardrail_breached) || (live && turnCount >= 2 && hasScore && call.score_overall < 40);
+  const reason = alert ? alertReason(call, score) ?? "Clinic staff should review this call" : null;
   const action = live ? currentAction(events, call) : "Call completed";
   const callerName = call.patient_name ?? call.from_number ?? "Incoming call";
   const callerDetail = call.patient_name
@@ -184,8 +186,8 @@ function CallCard({ call, events, now }) {
       </a>
       {alert && live && (
         <div className="mt-4 flex items-center justify-between gap-3 border-t border-rose-200 pt-4">
-          <p className="text-xs font-medium text-rose-700">
-            {stopStatus === "error" ? "The agent could not be stopped" : "Clinic staff should review this call"}
+          <p className="min-w-0 text-xs font-medium text-rose-700 line-clamp-2" title={reason}>
+            {stopStatus === "error" ? "The agent could not be stopped" : reason}
           </p>
           <button
             type="button"
