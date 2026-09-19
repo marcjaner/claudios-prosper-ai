@@ -1,4 +1,5 @@
 const GRAPH_KINDS = new Set([
+  "request_finished",
   "stage_entered",
   "fact_recorded",
   "tool_rejected",
@@ -32,6 +33,14 @@ function Entry({ event, startedAt }) {
   const at = startedAt ? `${(event.ts - startedAt).toFixed(1)}s` : "";
   const { kind, payload } = event;
 
+  if (kind === "request_finished") {
+    return (
+      <Row at={at} tone="text-sky-400">
+        petición {payload.request} completada con {payload.action}
+        {payload.next === "finished" && <span className="text-slate-500"> · la llamada termina</span>}
+      </Row>
+    );
+  }
   if (kind === "stage_entered") {
     return (
       <Row at={at} tone="text-emerald-400">

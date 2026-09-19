@@ -5,7 +5,7 @@ import pytest
 from agent.agent import run_agent_turn
 from agent.graph import InvalidGraph, parse_graph
 from agent.llm import LLMToolCall, ToolCompletion, Usage
-from agent.stage_runtime import CallGraph
+from agent.stage_runtime import CallGraph, HistoryEntry
 
 IDENTIFY = {
     "id": "identify",
@@ -444,3 +444,56 @@ def test_a_blank_final_answer_still_says_something():
                       {"search_patients": {"patients": [{"id": "P1"}]}})
 
     assert spoken[-1] == NO_ANSWER_FALLBACK
+
+
+# --- a call is a sequence of requests ---------------------------------------
+
+def test_a_completed_action_starts_the_next_request_at_the_entry_stage():
+    """'Cita para mí y anular la de mi hija' is two passes, not a step backwards."""
+    state = two_stage_state()
+    state.facts.update({"patient_id": "P1", "slot": "10:00"})
+    state.enter("book")
+
+    assert state.complete("cancel_appointment") == "next_request"
+    assert state.stage_id == state.graph.entry
+    assert state.facts == {}
+    assert state.request == 2
+
+
+def test_registering_ends_the_call_rather_than_starting_another_request():
+    """A new patient has no chart to book against, so nothing may follow."""
+    state = two_stage_state()
+
+    assert state.complete("register_patient") == "finished"
+    assert state.finished is True
+    assert state.refuse_reason("search_patients", {"name": "Ana"})
+
+
+def test_escalating_ends_the_call():
+    state = two_stage_state()
+
+    assert state.complete("escalate_to_human") == "finished"
+    assert state.refuse_reason("search_patients", {"name": "Ana"})
+
+
+def test_the_conversation_survives_a_request_boundary():
+    """Only the facts reset; wiping the transcript would sound like a fresh call."""
+    state = two_stage_state()
+    state.history.append(HistoryEntry(speaker="caller", text="soy Marc"))
+    state.facts["patient_id"] = "P1"
+
+    state.complete("book_appointment")
+
+    assert [entry.text for entry in state.history] == ["soy Marc"]
+    assert state.done == ["book_appointment"]
+
+
+def test_a_later_request_tells_the_model_not_to_greet_again():
+    from agent.stage_runtime import render_context
+
+    state = two_stage_state()
+    state.complete("book_appointment")
+    context = render_context(state)
+
+    assert "petición número 2" in context
+    assert "no la saludes de nuevo" in context
