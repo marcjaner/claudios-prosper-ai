@@ -102,6 +102,7 @@ export default function Builder() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [entry, setEntry] = useState("");
+  const [system, setSystem] = useState("");
   const [tools, setTools] = useState([]);
   const [selected, setSelected] = useState(null);
   const [status, setStatus] = useState("");
@@ -117,6 +118,7 @@ export default function Builder() {
       setNodes(toFlowNodes(graph));
       setEdges(toFlowEdges(graph));
       setEntry(graph.entry);
+      setSystem(graph.system ?? "");
       setTools(catalogue.tools);
     });
   }, [setNodes, setEdges]);
@@ -212,6 +214,7 @@ export default function Builder() {
   const save = async () => {
     const payload = {
       entry,
+      system,
       nodes: nodes.map((node) => ({
         id: node.id,
         prompt: node.data.prompt,
@@ -295,10 +298,29 @@ export default function Builder() {
 
       <aside className="w-96 overflow-y-auto border-l border-slate-800 bg-slate-950 p-4">
         {!selected && (
-          <p className="text-sm text-slate-500">
-            Selecciona una etapa o una transición. Arrastra de un conector a otro para crear una
-            transición.
-          </p>
+          <div className="space-y-4">
+            <label className="block">
+              <span className="text-xs uppercase tracking-wide text-slate-500">
+                Instrucciones generales
+              </span>
+              <textarea
+                id="system-prompt"
+                value={system}
+                onChange={(event) => setSystem(event.target.value)}
+                rows={18}
+                placeholder="Cómo habla el agente, qué puede afirmar y de dónde salen los identificadores."
+                className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 p-2 text-sm text-slate-200"
+              />
+              <span className="mt-1 block text-[11px] text-slate-600">
+                Va delante de las instrucciones de cada etapa, en todas las llamadas. Las etapas
+                dicen qué hacer y cuándo; esto dice cómo.
+              </span>
+            </label>
+            <p className="border-t border-slate-800 pt-4 text-sm text-slate-500">
+              Selecciona una etapa o una transición para editarla. Arrastra de un conector a otro
+              para crear una transición.
+            </p>
+          </div>
         )}
 
         {node && (

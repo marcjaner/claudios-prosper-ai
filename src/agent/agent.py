@@ -9,16 +9,15 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-import yaml
 import httpx
 from pipecat.frames.frames import SystemFrame
 from pipecat.transcriptions.language import Language
 
 from agent.clinic_api import ClinicApi, ProsperApiError
+from agent.graph import load_graph
 from agent.language import DEFAULT_LANGUAGE, phrases, reply_instruction
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
@@ -73,14 +72,9 @@ def retrieve_memory() -> str:
     return ""
 
 
-def _system_prompt() -> str:
-    with (Path(__file__).with_name("prompts.yaml")).open(encoding="utf-8") as file:
-        return yaml.safe_load(file)["system"]
-
-
 def _completion_prompt(prompt: str) -> str:
     return (
-        f"System prompt:\n{_system_prompt()}\n\n"
+        f"System prompt:\n{load_graph().system}\n\n"
         f"Memory:\n{retrieve_memory()}\n\nCaller input:\n{prompt}"
     )
 
@@ -467,7 +461,7 @@ async def run_agent_turn(
 def _graph_prompt(state: CallGraph, language: Language = DEFAULT_LANGUAGE, guardrails: str = "") -> str:
     guardrail_prompt = f"\n\nConfigured guardrails (always follow):\n{guardrails}" if guardrails else ""
     return (
-        f"System prompt:\n{_system_prompt()}\n{reply_instruction(language)}{guardrail_prompt}\n\n"
+        f"System prompt:\n{state.graph.system}\n{reply_instruction(language)}{guardrail_prompt}\n\n"
         f"{render_context(state)}"
     )
 

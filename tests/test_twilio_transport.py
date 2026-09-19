@@ -131,7 +131,7 @@ def test_withheld_caller_id_is_served():
 def test_call_debug_bundle_has_synchronized_tracks(tmp_path, monkeypatch):
     monkeypatch.setenv("CALL_RECORDINGS_DIR", str(tmp_path))
 
-    result = call_the_echo_agent(0.5, linger_seconds=0.2)
+    result = call_the_echo_agent(2.0, linger_seconds=0.2)
 
     assert result.ok, result.error
     bundle = tmp_path / result.call_id
@@ -159,7 +159,7 @@ def test_call_debug_bundle_has_synchronized_tracks(tmp_path, monkeypatch):
             frame_counts.append(audio.getnframes())
 
     assert len(set(frame_counts)) == 1
-    assert frame_counts[0] > 0
+    assert frame_counts[0] > 24_000
 
 
 def test_ten_concurrent_calls():

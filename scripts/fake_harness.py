@@ -6,6 +6,7 @@ import audioop
 import base64
 import json
 import math
+import os
 import struct
 import time
 import uuid
@@ -19,6 +20,7 @@ WIRE_SAMPLE_RATE = 8_000
 FRAME_DURATION_MS = 20
 MULAW_FRAME_BYTES = 160
 MULAW_SILENCE = b"\xff"
+DEFAULT_SERVER_PORT = os.getenv("CONDUCTOR_PORT", "7860")
 
 
 def read_wav_as_mulaw_source(path: Path) -> bytes:
@@ -244,7 +246,7 @@ async def place_call(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="ws://localhost:7860/ws")
+    parser.add_argument("--url", default=f"ws://localhost:{DEFAULT_SERVER_PORT}/ws")
     parser.add_argument(
         "--wav", help="caller audio; a synthesized sweep is used without it"
     )
