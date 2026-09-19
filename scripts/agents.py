@@ -7,7 +7,6 @@ import logging
 from agent.agent import run_agent
 from agent.utils import configure_logging
 
-
 if __name__ == "__main__":
     configure_logging(logging.DEBUG)
     prompt = "I would like to book a general check-up for next Tuesday."

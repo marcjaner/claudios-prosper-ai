@@ -39,6 +39,36 @@ const ACTION_COPY = {
     success: "Se ha cancelado la cita",
     description: "Se ha registrado la cancelación de la cita solicitada.",
   },
+  prepare_booking: {
+    label: "Preparación de una reserva",
+    success: "Reserva preparada, pendiente de confirmación",
+    description: "Se han fijado los datos de la reserva, pero todavía no se ha enviado.",
+  },
+  prepare_reschedule: {
+    label: "Preparación de un cambio de cita",
+    success: "Cambio preparado, pendiente de confirmación",
+    description: "Se han fijado los datos del cambio, pero todavía no se ha enviado.",
+  },
+  prepare_cancellation: {
+    label: "Preparación de una cancelación",
+    success: "Cancelación preparada, pendiente de confirmación",
+    description: "Se ha identificado la cita, pero todavía no se ha cancelado.",
+  },
+  confirm_action: {
+    label: "Confirmación de la acción",
+    success: "Se ha confirmado la acción solicitada",
+    description: "La acción preparada se ha enviado tras la confirmación del paciente.",
+  },
+  get_call_state: {
+    label: "Consulta del estado de la llamada",
+    success: "Se ha consultado el estado de la solicitud",
+    description: "Se han revisado las solicitudes y propuestas activas de esta llamada.",
+  },
+  revise_request: {
+    label: "Revisión de la solicitud",
+    success: "Se ha reabierto la solicitud",
+    description: "Se ha descartado la propuesta anterior para recoger nuevos datos.",
+  },
   submit_no_action: {
     label: "Cierre de la solicitud sin cambios",
     success: "No se ha realizado ninguna acción",
@@ -98,6 +128,17 @@ function toolName(name) {
 function actionCopy(name) {
   const normalized = toolName(name);
   return Object.hasOwn(ACTION_COPY, normalized) ? ACTION_COPY[normalized] : OTHER_ACTION;
+}
+
+function confirmedActionCopy(action) {
+  if (action.name !== "confirm_action" || action.state !== "success") return null;
+  const confirmedAction = action.result?.response?.action;
+  const names = {
+    BOOK: "Se ha reservado una cita",
+    RESCHEDULE: "Se ha cambiado la cita",
+    CANCEL: "Se ha cancelado una cita",
+  };
+  return names[confirmedAction] ?? null;
 }
 
 export function getActionLabel(name) {
@@ -217,7 +258,7 @@ export function buildAgentActions(events, { live = false } = {}) {
     const copy = actionCopy(action.name);
     return {
       ...action,
-      title: action.state === "success" ? copy.success : copy.label,
+      title: confirmedActionCopy(action) ?? (action.state === "success" ? copy.success : copy.label),
       description: actionDescription(action),
     };
   });

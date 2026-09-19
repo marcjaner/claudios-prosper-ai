@@ -5,21 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .call_context import CallContext
 from .graph import GO_TO_TOOL, RECORD_FACTS_TOOL, Graph, load_graph
 from .tools import SUBMISSION_TOOL_NAMES
 
 # An action step's speech is written before its own results, so the last step of a
 # turn is always tool-free: otherwise a booking on the final step is never confirmed.
 MAX_ACTION_STEPS = 4
+TRUSTED_FACT_KEYS = frozenset({"proposal_id"})
 
-GRAPH_TOOL_DEFINITIONS = [
+GRAPH_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
             "name": RECORD_FACTS_TOOL,
             "description": (
                 "Record what you have learned about this call so later stages can use it. "
-                "Keys and values are plain strings. Never announce this to the caller."
+                "Keys and values are plain strings. proposal_id is recorded automatically "
+                "and must never be supplied here. Never announce this to the caller."
             ),
             "parameters": {
                 "type": "object",
@@ -76,6 +79,7 @@ class CallGraph:
 
     graph: Graph
     stage_id: str
+    context: CallContext = field(default_factory=lambda: CallContext("standalone"))
     facts: dict[str, str] = field(default_factory=dict)
     history: list[HistoryEntry] = field(default_factory=list)
     turn: int = 0
@@ -83,7 +87,7 @@ class CallGraph:
     calls_made: set[str] = field(default_factory=set)
 
     def start_turn(self) -> None:
-        self.turn += 1
+        self.turn = self.context.begin_turn()
         self.failed_tools.clear()
         self.calls_made.clear()
 
@@ -92,9 +96,23 @@ class CallGraph:
         return f"{name}:{sorted(arguments.items(), key=lambda item: item[0])}"
 
     @classmethod
-    def start(cls, graph: Graph | None = None) -> CallGraph:
+    def start(
+        cls, graph: Graph | None = None, *, call_id: str = "standalone"
+    ) -> CallGraph:
         resolved = graph or load_graph()
-        return cls(graph=resolved, stage_id=resolved.entry)
+        return cls(
+            graph=resolved,
+            stage_id=resolved.entry,
+            context=CallContext(call_id),
+        )
+
+    def projection(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage_id,
+            "turn": self.turn,
+            "facts": dict(self.facts),
+            "request_context": self.context.projection(),
+        }
 
     @property
     def stage(self):
@@ -109,7 +127,11 @@ class CallGraph:
     def refuse_reason(self, name: str, arguments: dict[str, Any]) -> str:
         """Why this call is not allowed here, or an empty string if it is."""
         if name == RECORD_FACTS_TOOL:
-            return "" if self.has_facts_payload(arguments) else "record_facts needs a flat mapping of strings"
+            if not self.has_facts_payload(arguments):
+                return "record_facts needs a flat mapping of strings"
+            if TRUSTED_FACT_KEYS.intersection(arguments["facts"]):
+                return "proposal_id can only come from a successful prepare tool"
+            return ""
         if name == GO_TO_TOOL:
             return self._refuse_transition(str(arguments.get("stage", "")))
         if name not in self.stage.tools:
@@ -146,8 +168,9 @@ class CallGraph:
         )
 
     def record_facts(self, arguments: dict[str, Any]) -> dict[str, str]:
-        if not self.has_facts_payload(arguments):
-            raise InvalidFacts("facts must be a flat mapping of strings")
+        reason = self.refuse_reason(RECORD_FACTS_TOOL, arguments)
+        if reason:
+            raise InvalidFacts(reason)
         written = {key: str(value) for key, value in arguments["facts"].items()}
         self.facts.update(written)
         return written
@@ -198,7 +221,11 @@ def _render_transitions(options: list[dict[str, Any]]) -> str:
     lines = []
     for option in options:
         needs = ", ".join(option["requires"]) or "nothing"
-        state = "ready" if not option["missing"] else f"still missing {', '.join(option['missing'])}"
+        state = (
+            "ready"
+            if not option["missing"]
+            else f"still missing {', '.join(option['missing'])}"
+        )
         lines.append(f"  {option['stage']} — requires {needs} ({state})")
     return (
         "Stages you can move to with go_to, and the exact fact keys each one needs:\n"

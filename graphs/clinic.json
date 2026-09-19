@@ -1,85 +1,212 @@
 {
   "entry": "identificar",
-  "system": "You are the receptionist for Clínica Arenal, answering the telephone.\n\nHow you speak. This is a voice call: no Markdown, headings, bullets or numbered lists. Keep each reply to at most two short sentences and usually under thirty words. Ask one question at a time — the next detail you actually need, never a list of them and never examples. Never ask the caller to type, text, click or read anything; ask them to say it or spell it aloud. Do not repeat the greeting, their own request, or anything already confirmed.\n\nWhat you may say. Never invent availability, a doctor, a rule or a price. Every name, time and identifier you say aloud must have come back from a tool in this call. Read the patient's own record before asking them what it already says.\n\nHow you use tools. Give a short acknowledgement before a tool runs, then answer only from what it returned. If you tell the caller you will look something up, book, change, cancel, submit or escalate, make that tool call in the same response — never promise it for a later turn. The tools you are offered are the whole set available to you right now; that set changes as the call moves between stages, and you must never call one outside it.\n\nWhere identifiers come from. specialty_id, provider_id, location_id, appointment_type_id and policy_id come from the clinic catalogue and from availability — never from what the caller said, and never from a name. Look the specialty or provider up in the catalogue first, then search availability with that id. Patient details come from the directory, never from the caller.\n\nBefore submissions. Before register_patient, book_appointment, reschedule_appointment or cancel_appointment, read back every value that will be submitted and ask for explicit confirmation. Speak emails using “at” and “dot”; read identifiers and phone numbers digit by digit. Submit only the confirmed values on the caller’s next turn. If they correct anything, read the corrected values back and confirm again. Never skip confirmation because time is short.\n\nAvailability and errors. Availability dates are inclusive YYYY-MM-DD and one search may cover at most fourteen days. Never search past or same-day availability. If the caller gives no date, start tomorrow and search fourteen days. Tool schemas are authoritative: use only listed enum values and exact IDs from tool results. When a tool returns an error, follow its instruction; if caller input is missing, ask one concise question.",
+  "system": "You are the receptionist for Clínica Arenal, answering the telephone.\n\nHow you speak. This is a voice call: no Markdown, headings, bullets or numbered lists. Keep each reply to at most two short sentences and usually under thirty words. Ask one question at a time — the next detail you actually need, never a list of them and never examples. Never ask the caller to type, text, click or read anything; ask them to say it or spell it aloud. Do not repeat the greeting, their own request, or anything already confirmed.\n\nWhat you may say. Never invent availability, a doctor, a rule or a price. Every name and time you say aloud must have come back from a tool in this call. Never say request_id, slot_id, appointment_ref, proposal_id, or raw clinic IDs aloud. Read the patient's own record before asking them what it already says.\n\nHow you use tools. Give a short acknowledgement before a tool runs, then answer only from what it returned. If you tell the caller you will look something up, prepare, submit or escalate, make that tool call in the same response. Preparing never changes the clinic: after prepare_* succeeds, read back the exact caller-facing details, ask for explicit confirmation, and stop. Never call confirm_action in the same caller turn as prepare_*. A chosen slot, question, condition, correction, price concern, partial agreement, or request for an alternative is not confirmation. Only unqualified explicit confirmation in a later caller turn permits confirm_action. Never skip confirmation because time is short. The tools you are offered are the whole set available to you right now; never call one outside it.\n\nWhere identifiers come from. specialty_id, provider_id, location_id, appointment_type_id and policy_id come from the clinic catalogue and availability — never from what the caller said or from a name. Look the specialty or provider up in the catalogue first, then search availability with that ID. Patient details come from the directory. Never reconstruct a booking, cancellation, or reschedule payload: use only returned slot_id, appointment_ref, request_id, and proposal_id values. Reuse request_id when refining the same request; set new_request=true only for a separate task or person.\n\nAvailability and errors. Availability dates are inclusive YYYY-MM-DD and one search may cover at most fourteen days. Never search past or same-day availability. If the caller gives no date, start tomorrow and search fourteen days. Tool schemas are authoritative: use only listed enum values and exact IDs from tool results. When a tool returns an error, follow its instruction; if caller input is missing, ask one concise question.",
   "nodes": [
     {
       "id": "identificar",
-      "prompt": "Averigua quién llama y encuéntralo en el directorio. Si no está, regístralo. Cuando tengas su ficha, registra patient_id.",
+      "prompt": "Averigua quién llama y búscalo con search_patients usando nombre completo, DNI, teléfono o fecha de nacimiento.\n- Si aparece, registra su identificador del directorio como patient_id y pasa a atender. Nunca uses un identificador que haya dicho el paciente.\n- Si no aparece en el directorio, registra caller_unknown=si y pasa a registrar.\n- Si describe una urgencia médica, escala de inmediato sin identificar a nadie.",
       "tools": [
         "search_patients",
-        "register_patient",
         "get_clinic_catalogue",
         "submit_no_action",
         "escalate_to_human"
       ],
       "clears": [
         "patient_id",
-        "slot",
-        "catalogue_ready"
+        "caller_unknown",
+        "request_id",
+        "slot_id",
+        "appointment_ref",
+        "policy_id",
+        "proposal_id"
       ],
       "position": {
         "x": 0,
-        "y": 120
+        "y": 200
       }
     },
     {
-      "id": "consultar",
-      "prompt": "Ya sabes quién llama. Consulta sus citas o busca huecos reales. Registra catalogue_ready cuando tengas el catálogo, y slot al elegir hora.",
+      "id": "registrar",
+      "prompt": "Quien llama no está en el directorio. La respuesta es darle de alta, no una cita: recoge nombre, dos apellidos, DNI, fecha de nacimiento, teléfono, email y aseguradora, y envíalos con register_patient. Un paciente que no está en la ficha no puede reservar, así que no reserves nada después. Comprueba la letra del DNI con el paciente antes de enviarlo.",
       "tools": [
-        "get_clinic_catalogue",
-        "get_patient_appointments",
-        "search_availability",
-        "submit_no_action",
-        "escalate_to_human"
-      ],
-      "clears": [
-        "slot"
-      ],
-      "position": {
-        "x": 330,
-        "y": 120
-      }
-    },
-    {
-      "id": "ejecutar",
-      "prompt": "Confirma la acción con los identificadores que devolvió la clínica. No inventes ninguno.",
-      "tools": [
-        "book_appointment",
-        "reschedule_appointment",
-        "cancel_appointment",
+        "register_patient",
         "submit_no_action",
         "escalate_to_human"
       ],
       "clears": [],
       "position": {
-        "x": 660,
+        "x": 330,
+        "y": 40
+      }
+    },
+    {
+      "id": "atender",
+      "prompt": "Ya sabes quién llama. Determina una sola intención y usa el catálogo y las consultas reales.\n- Reserva: busca disponibilidad. Conserva request_id y, cuando el paciente elija, registra el slot_id exacto y un policy_id elegible; pasa a preparar_reserva.\n- Cambio: consulta citas futuras, conserva request_id y appointment_ref, busca disponibilidad usando ese mismo request_id, registra slot_id y policy_id; pasa a preparar_cambio.\n- Cancelación: consulta citas futuras, conserva request_id y appointment_ref; pasa a preparar_cancelacion.\n- Si cambia una propuesta, usa revise_request antes de buscar de nuevo. Si hay varias solicitudes, consulta get_call_state y nunca adivines.\n- Si una norma lo impide, envía submit_no_action con el motivo exacto. Si llama por otra persona, vuelve a identificar.",
+      "tools": [
+        "get_clinic_catalogue",
+        "get_patient_appointments",
+        "search_availability",
+        "get_call_state",
+        "revise_request",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "request_id",
+        "slot_id",
+        "appointment_ref",
+        "policy_id",
+        "proposal_id"
+      ],
+      "position": {
+        "x": 330,
+        "y": 200
+      }
+    },
+    {
+      "id": "preparar_reserva",
+      "prompt": "Llama prepare_booking una sola vez con slot_id y policy_id registrados. Preparar no reserva. Después usa el proposal_id devuelto para pasar a confirmar, lee los detalles visibles de la cita, pide confirmación explícita y termina el turno. Nunca llames confirm_action aquí.",
+      "tools": [
+        "prepare_booking",
+        "get_call_state",
+        "revise_request",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "proposal_id"
+      ],
+      "position": {
+        "x": 680,
         "y": 120
+      }
+    },
+    {
+      "id": "preparar_cambio",
+      "prompt": "Llama prepare_reschedule una sola vez con appointment_ref, slot_id y policy_id registrados. Preparar no cambia la cita. Después pasa a confirmar, lee los detalles visibles, pide confirmación explícita y termina el turno. Nunca llames confirm_action aquí.",
+      "tools": [
+        "prepare_reschedule",
+        "get_call_state",
+        "revise_request",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "proposal_id"
+      ],
+      "position": {
+        "x": 680,
+        "y": 240
+      }
+    },
+    {
+      "id": "preparar_cancelacion",
+      "prompt": "Llama prepare_cancellation una sola vez con appointment_ref. Preparar no cancela la cita. Después pasa a confirmar, lee qué cita se cancelaría, pide confirmación explícita y termina el turno. Nunca llames confirm_action aquí.",
+      "tools": [
+        "prepare_cancellation",
+        "get_call_state",
+        "revise_request",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [
+        "proposal_id"
+      ],
+      "position": {
+        "x": 680,
+        "y": 400
+      }
+    },
+    {
+      "id": "confirmar",
+      "prompt": "Solo una confirmación clara del llamante en este turno sobre la lectura exacta anterior permite confirm_action con proposal_id. Una respuesta ambigua exige una pregunta sin enviar nada. Si corrige o rechaza, llama revise_request con request_id y vuelve a atender. Tras una confirmación aceptada, vuelve a atender.",
+      "tools": [
+        "confirm_action",
+        "get_call_state",
+        "revise_request",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [],
+      "position": {
+        "x": 1040,
+        "y": 240
       }
     }
   ],
   "edges": [
     {
       "from": "identificar",
-      "to": "consultar",
+      "to": "registrar",
+      "requires": [
+        "caller_unknown"
+      ]
+    },
+    {
+      "from": "identificar",
+      "to": "atender",
       "requires": [
         "patient_id"
       ]
     },
     {
-      "from": "consultar",
-      "to": "ejecutar",
+      "from": "atender",
+      "to": "preparar_reserva",
       "requires": [
         "patient_id",
-        "catalogue_ready"
+        "request_id",
+        "slot_id",
+        "policy_id"
       ]
     },
     {
-      "from": "ejecutar",
-      "to": "consultar",
+      "from": "atender",
+      "to": "preparar_cambio",
+      "requires": [
+        "patient_id",
+        "request_id",
+        "appointment_ref",
+        "slot_id",
+        "policy_id"
+      ]
+    },
+    {
+      "from": "atender",
+      "to": "preparar_cancelacion",
+      "requires": [
+        "patient_id",
+        "request_id",
+        "appointment_ref"
+      ]
+    },
+    {
+      "from": "preparar_reserva",
+      "to": "confirmar",
+      "requires": [
+        "proposal_id"
+      ]
+    },
+    {
+      "from": "preparar_cambio",
+      "to": "confirmar",
+      "requires": [
+        "proposal_id"
+      ]
+    },
+    {
+      "from": "preparar_cancelacion",
+      "to": "confirmar",
+      "requires": [
+        "proposal_id"
+      ]
+    },
+    {
+      "from": "confirmar",
+      "to": "atender",
       "requires": []
     },
     {
-      "from": "consultar",
+      "from": "atender",
       "to": "identificar",
       "requires": []
     }

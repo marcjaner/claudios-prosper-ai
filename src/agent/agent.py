@@ -10,7 +10,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,7 @@ import httpx
 from pipecat.frames.frames import SystemFrame
 from pipecat.transcriptions.language import Language
 
+from agent.call_context import CallContext
 from agent.clinic_api import ClinicApi, ProsperApiError
 from agent.graph import load_graph
 from agent.language import DEFAULT_LANGUAGE, phrases, reply_instruction
@@ -33,7 +34,13 @@ from agent.stage_runtime import (
     Operation,
     render_context,
 )
-from agent.tools import SUBMISSION_TOOL_NAMES, create_clinic_tools, load_tools
+from agent.tools import (
+    SUBMISSION_TOOL_NAMES,
+    ClinicTools,
+    SubmissionRecord,
+    create_clinic_tools,
+    load_tools,
+)
 from agent.utils import configure_logging
 from observability import emit, update_call
 from observability.frames import (
@@ -60,14 +67,21 @@ SENSITIVE_ARGUMENT_MARKERS = {
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
 CLINIC_TIMEZONE = ZoneInfo("Europe/Madrid")
-GUARDRAIL_REFUSAL = "I cannot help with that request. I can help you with your appointment."
+GUARDRAIL_REFUSAL = (
+    "I cannot help with that request. I can help you with your appointment."
+)
 SUBMISSIONS = {
     "register_patient": ("/api/v1/submit/register", "REGISTER"),
-    "book_appointment": ("/api/v1/submit/book", "BOOK"),
-    "reschedule_appointment": ("/api/v1/submit/reschedule", "RESCHEDULE"),
-    "cancel_appointment": ("/api/v1/submit/cancel", "CANCEL"),
     "submit_no_action": ("/api/v1/submit/no-action", "NO_ACTION"),
     "escalate_to_human": ("/api/v1/submit/escalate", "ESCALATE"),
+}
+SUBMISSION_ROUTES = {
+    "REGISTER": "/api/v1/submit/register",
+    "BOOK": "/api/v1/submit/book",
+    "RESCHEDULE": "/api/v1/submit/reschedule",
+    "CANCEL": "/api/v1/submit/cancel",
+    "NO_ACTION": "/api/v1/submit/no-action",
+    "ESCALATE": "/api/v1/submit/escalate",
 }
 
 
@@ -189,7 +203,7 @@ async def _observed_completion(
             cached_tokens=usage.cached_tokens,
         ),
     )
-    return completion.data
+    return cast(AgentResponse, completion.data)
 
 
 def run_agent(
@@ -202,9 +216,15 @@ def run_agent(
     configure_logging()
     if (clinic_api is None) != (call_id is None):
         raise ValueError("clinic_api and call_id must be provided together")
-    tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
+    context = CallContext(call_id or "standalone")
+    context.begin_turn()
+    tools = load_tools(
+        create_clinic_tools(clinic_api, context.call_id, context) if clinic_api else []
+    )
     response = _completion(prompt, client, tools)
-    _logger.info("Agent produced immediate answer and %d tool call(s)", len(response.tool_calls))
+    _logger.info(
+        "Agent produced immediate answer and %d tool call(s)", len(response.tool_calls)
+    )
     _logger.debug("Structured agent response: %s", response.model_dump())
     yield response.immediate_answer
 
@@ -245,7 +265,9 @@ def run_agent(
             output = tool.execute(**call.arguments)
         except ProsperApiError as exc:
             elapsed_ms = _elapsed_ms(started)
-            _logger.warning("Prosper rejected tool=%s status=%s", call.name, exc.status_code)
+            _logger.warning(
+                "Prosper rejected tool=%s status=%s", call.name, exc.status_code
+            )
             output = f"Prosper API error {exc.status_code}: {exc.detail}"
             if call_id:
                 emit(
@@ -339,7 +361,11 @@ def _record_unique_patient(call_id: str, output: Any) -> None:
     if not isinstance(output, dict):
         return
     matches = output.get("matches")
-    if not isinstance(matches, list) or len(matches) != 1 or not isinstance(matches[0], dict):
+    if (
+        not isinstance(matches, list)
+        or len(matches) != 1
+        or not isinstance(matches[0], dict)
+    ):
         return
     match = matches[0]
     fields: dict[str, Any] = {}
@@ -368,10 +394,14 @@ async def run_agent_for_call(
     call_id: str,
     repository: CallRepository,
     client: LLMClient | None = None,
+    *,
+    state: CallGraph | None = None,
 ) -> AgentResponse:
     responses = [
         response
-        async for response in run_agent_turn(prompt, call_id, repository, client)
+        async for response in run_agent_turn(
+            prompt, call_id, repository, client, state=state
+        )
     ]
     return responses[-1]
 
@@ -390,13 +420,17 @@ async def run_agent_turn(
     """Run one caller turn as a bounded loop over the call's stage graph."""
     configure_logging()
     _logger.info("starting call agent | call_id=%s prompt=%r", call_id, prompt)
-    state = state or CallGraph.start()
+    state = state or CallGraph.start(call_id=call_id)
+    if state.context.call_id != call_id:
+        raise ValueError("state call_id does not match call_id")
     state.start_turn()
     state.history.append(HistoryEntry(speaker="caller", text=prompt))
     await repository.append_event(call_id, "caller_text_received", {"text": prompt})
     await repository.seed_default_guardrails()
     guardrails = await repository.list_guardrails()
-    guardrail_text = "\n".join(f"- {row.title}: {row.description or row.text}" for row in guardrails)
+    guardrail_text = "\n".join(
+        f"- {row.title}: {row.description or row.text}" for row in guardrails
+    )
 
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
@@ -404,7 +438,8 @@ async def run_agent_turn(
     spoke_this_step = False
     ending = "waiting"
     try:
-        tools = load_tools(create_clinic_tools(api, call_id))
+        clinic_tools = ClinicTools(api, state.context)
+        tools = load_tools(clinic_tools.functions())
         for step in range(1, MAX_ACTION_STEPS + 1):
             completion = await _observed_tool_completion(
                 _graph_prompt(
@@ -424,17 +459,34 @@ async def run_agent_turn(
             if api_key and guardrails and completion.text.strip():
                 async with httpx.AsyncClient(timeout=15) as jev_client:
                     classification = await classify_guardrail_breach(
-                        [{"speaker": "patient", "text": prompt}, {"speaker": "agent", "text": completion.text}],
-                        [f"{row.title}: {row.description or row.text}" for row in guardrails],
-                        jev_client, api_key,
+                        [
+                            {"speaker": "patient", "text": prompt},
+                            {"speaker": "agent", "text": completion.text},
+                        ],
+                        [
+                            f"{row.title}: {row.description or row.text}"
+                            for row in guardrails
+                        ],
+                        jev_client,
+                        api_key,
                     )
                 if classification["breached"]:
                     violations = classification["violations"]
-                    reason = "; ".join(item["guardrail"].split(":", 1)[0] for item in violations)
-                    await repository.append_event(call_id, "guardrail_breach", {"reason": reason})
-                    update_call(call_id, guardrail_breached=1, guardrail_reason=reason,
-                                guardrail_violations=json.dumps(violations, ensure_ascii=False))
-                    yield AgentResponse(immediate_answer=GUARDRAIL_REFUSAL, tool_calls=[])
+                    reason = "; ".join(
+                        item["guardrail"].split(":", 1)[0] for item in violations
+                    )
+                    await repository.append_event(
+                        call_id, "guardrail_breach", {"reason": reason}
+                    )
+                    update_call(
+                        call_id,
+                        guardrail_breached=1,
+                        guardrail_reason=reason,
+                        guardrail_violations=json.dumps(violations, ensure_ascii=False),
+                    )
+                    yield AgentResponse(
+                        immediate_answer=GUARDRAIL_REFUSAL, tool_calls=[]
+                    )
                     return
             speech = _speech_for(completion, batch.refused, language)
             should_speak = bool(speech) and (
@@ -443,15 +495,26 @@ async def run_agent_turn(
             spoke_this_step = should_speak
             if should_speak:
                 state.history.append(HistoryEntry(speaker="agent", text=speech))
-                await repository.append_event(call_id, "agent_response", {"text": speech})
+                await repository.append_event(
+                    call_id, "agent_response", {"text": speech}
+                )
                 yield AgentResponse(immediate_answer=speech, tool_calls=[])
             if not completion.tool_calls:
                 break
 
             produced_new = await _execute_batch(
-                batch, state, tools, call_id, repository, event_sink, step
+                batch,
+                state,
+                tools,
+                clinic_tools,
+                call_id,
+                repository,
+                event_sink,
+                step,
             )
-            state.history.append(HistoryEntry(speaker="agent", operations=batch.operations))
+            state.history.append(
+                HistoryEntry(speaker="agent", operations=batch.operations)
+            )
             if batch.refused:
                 continue
             if not produced_new:
@@ -477,8 +540,13 @@ async def run_agent_turn(
         ending = "failed"
         raise
     finally:
-        emit(call_id, "turn_finished", {"turn": state.turn, "stage": state.stage_id, "ending": ending})
+        emit(
+            call_id,
+            "turn_finished",
+            {"turn": state.turn, "stage": state.stage_id, "ending": ending},
+        )
         await asyncio.to_thread(api.close)
+
 
 def _send_immediate_responses() -> bool:
     return os.getenv("SEND_IMMEDIATE_RESPONSES", "true").strip().lower() in {
@@ -487,6 +555,7 @@ def _send_immediate_responses() -> bool:
         "yes",
         "on",
     }
+
 
 def _remaining_seconds(initial: float | None, started_at: float) -> int | None:
     if initial is None:
@@ -541,7 +610,9 @@ def _graph_prompt(
 
 def _offered_tools(state: CallGraph, tools: dict[str, Tool]) -> list[dict[str, Any]]:
     """The stage's own tools, plus the graph's — go_to only where the stage has exits."""
-    offered = [tools[name].definition for name in state.allowed_tools() if name in tools]
+    offered = [
+        tools[name].definition for name in state.allowed_tools() if name in tools
+    ]
     for definition in GRAPH_TOOL_DEFINITIONS:
         if definition["function"]["name"] == GO_TO_TOOL and not state.has_exits():
             continue
@@ -559,7 +630,8 @@ def _speech_for(
     if text:
         return text
     business = [
-        call for call in completion.tool_calls
+        call
+        for call in completion.tool_calls
         if call.name not in (RECORD_FACTS_TOOL, GO_TO_TOOL)
     ]
     # Bookkeeping-only steps stay silent; a caller should never hear the graph working.
@@ -576,7 +648,9 @@ class Batch:
     refused: bool = False
 
 
-def _plan_batch(completion: ToolCompletion, state: CallGraph, call_id: str, step: int) -> Batch:
+def _plan_batch(
+    completion: ToolCompletion, state: CallGraph, call_id: str, step: int
+) -> Batch:
     """Refuse what the stage forbids and apply fact writes, before anything is spoken.
 
     Fact writes are internal state with no outside effect, so they happen here: a
@@ -597,10 +671,17 @@ def _plan_batch(completion: ToolCompletion, state: CallGraph, call_id: str, step
                 Operation(call.name, call.arguments, "executed", result="recorded")
             )
             for key, value in written.items():
-                emit(call_id, "fact_recorded", {
-                    "turn": state.turn, "step": step, "stage": state.stage_id,
-                    "key": key, "value": value,
-                })
+                emit(
+                    call_id,
+                    "fact_recorded",
+                    {
+                        "turn": state.turn,
+                        "step": step,
+                        "stage": state.stage_id,
+                        "key": key,
+                        "value": value,
+                    },
+                )
         else:
             batch.business.append(call)
 
@@ -619,18 +700,29 @@ def _refuse(
     batch: Batch, state: CallGraph, call: Any, reason: str, call_id: str, step: int
 ) -> None:
     batch.refused = True
-    batch.operations.append(Operation(call.name, call.arguments, "refused", detail=reason))
-    emit(call_id, "transition_rejected" if call.name == GO_TO_TOOL else "tool_rejected", {
-        "turn": state.turn, "step": step, "stage": state.stage_id,
-        "requested": call.arguments.get("stage") if call.name == GO_TO_TOOL else call.name,
-        "reason": reason,
-    })
+    batch.operations.append(
+        Operation(call.name, call.arguments, "refused", detail=reason)
+    )
+    emit(
+        call_id,
+        "transition_rejected" if call.name == GO_TO_TOOL else "tool_rejected",
+        {
+            "turn": state.turn,
+            "step": step,
+            "stage": state.stage_id,
+            "requested": call.arguments.get("stage")
+            if call.name == GO_TO_TOOL
+            else call.name,
+            "reason": reason,
+        },
+    )
 
 
 async def _execute_batch(
     batch: Batch,
     state: CallGraph,
     tools: dict[str, Tool],
+    clinic_tools: ClinicTools,
     call_id: str,
     repository: CallRepository,
     event_sink: EventSink | None,
@@ -647,29 +739,62 @@ async def _execute_batch(
             batch.operations.append(
                 Operation(call.name, call.arguments, "refused", detail=late_refusal)
             )
-            emit(call_id, "tool_rejected", {
-                "turn": state.turn, "step": step, "stage": state.stage_id,
-                "requested": call.name, "reason": late_refusal,
-            })
+            emit(
+                call_id,
+                "tool_rejected",
+                {
+                    "turn": state.turn,
+                    "step": step,
+                    "stage": state.stage_id,
+                    "requested": call.name,
+                    "reason": late_refusal,
+                },
+            )
             continue
-        operation = await _run_tool(call, state, tools, call_id, repository, event_sink)
+        operation = await _run_tool(
+            call,
+            state,
+            tools,
+            clinic_tools,
+            call_id,
+            repository,
+            event_sink,
+            step,
+        )
         batch.operations.append(operation)
         if operation.status == "executed":
             state.calls_made.add(state.signature(call.name, call.arguments))
         produced_new = True
 
-    if batch.transition is not None:
+    business_succeeded = all(
+        operation.status == "executed"
+        for operation in batch.operations
+        if operation.name not in (RECORD_FACTS_TOOL, GO_TO_TOOL)
+    )
+    if batch.transition is not None and business_succeeded:
         target = str(batch.transition.arguments["stage"])
         source = state.stage_id
         cleared = state.enter(target)
         batch.operations.append(
-            Operation(batch.transition.name, batch.transition.arguments, "executed",
-                      result=f"entered {target}")
+            Operation(
+                batch.transition.name,
+                batch.transition.arguments,
+                "executed",
+                result=f"entered {target}",
+            )
         )
-        emit(call_id, "stage_entered", {
-            "turn": state.turn, "step": step, "stage": target,
-            "from": source, "cleared": cleared,
-        })
+        emit(
+            call_id,
+            "stage_entered",
+            {
+                "turn": state.turn,
+                "step": step,
+                "stage": target,
+                "from": source,
+                "cleared": cleared,
+            },
+        )
+        await _save_state(repository, call_id, state)
         produced_new = True
     return produced_new
 
@@ -678,9 +803,11 @@ async def _run_tool(
     call: Any,
     state: CallGraph,
     tools: dict[str, Tool],
+    clinic_tools: ClinicTools,
     call_id: str,
     repository: CallRepository,
     event_sink: EventSink | None,
+    step: int,
 ) -> Operation:
     tool_call_id = uuid4().hex
     started_ns = time.perf_counter_ns()
@@ -692,31 +819,58 @@ async def _run_tool(
             arguments=_safe_arguments(call.arguments),
         ),
     )
-    emit(call_id, "tool_call", {
-        "name": call.name, "tool_call_id": tool_call_id,
-        "arguments": _safe_arguments(call.arguments),
-    })
+    emit(
+        call_id,
+        "tool_call",
+        {
+            "name": call.name,
+            "tool_call_id": tool_call_id,
+            "arguments": _safe_arguments(call.arguments),
+        },
+    )
     tool = tools[call.name]
     try:
         output = await asyncio.to_thread(tool.execute, **call.arguments)
+    except asyncio.CancelledError:
+        state.context.mark_any_submission_uncertain()
+        await _record_submission(repository, call_id, clinic_tools.take_submission())
+        await _save_state(repository, call_id, state)
+        raise
     except Exception as exc:  # noqa: BLE001 - a failed lookup is feedback, not the end of the turn
         await _emit_tool_error(
-            event_sink, call.name, tool_call_id, started_ns, type(exc).__name__,
+            event_sink,
+            call.name,
+            tool_call_id,
+            started_ns,
+            type(exc).__name__,
             "Tool execution failed",
         )
-        _logger.warning("tool failed | call_id=%s tool=%s error=%s", call_id, call.name, exc)
+        _logger.warning(
+            "tool failed | call_id=%s tool=%s error=%s", call_id, call.name, exc
+        )
         status = getattr(exc, "status_code", 500)
-        emit(call_id, "tool_result", {
-            "name": call.name, "tool_call_id": tool_call_id, "status": status,
-            "ms": _duration_ms(started_ns), "error": f"the request failed with status {status}",
-        })
-        can_retry = call.name not in SUBMISSION_TOOL_NAMES or isinstance(
-            exc, (ProsperApiError, TypeError, ValueError, LookupError)
+        emit(
+            call_id,
+            "tool_result",
+            {
+                "name": call.name,
+                "tool_call_id": tool_call_id,
+                "status": status,
+                "ms": _duration_ms(started_ns),
+                "error": f"the request failed with status {status}",
+            },
+        )
+        can_retry = (
+            call.name not in SUBMISSION_TOOL_NAMES
+            or isinstance(exc, (TypeError, ValueError, LookupError))
+            or (isinstance(exc, ProsperApiError) and call.name != "confirm_action")
         )
         output = _tool_error_output(exc, can_retry=can_retry)
         await repository.append_event(
             call_id, "tool_result", {"name": call.name, "output": output}
         )
+        await _record_submission(repository, call_id, clinic_tools.take_submission())
+        await _save_state(repository, call_id, state)
         if not can_retry:
             state.failed_tools.add(call.name)
         # The model sees that it failed, never the provider's own words.
@@ -740,18 +894,116 @@ async def _run_tool(
     await repository.append_event(
         call_id, "tool_call", {"name": call.name, "arguments": call.arguments}
     )
-    await repository.append_event(call_id, "tool_result", {"name": call.name, "output": output})
-    emit(call_id, "tool_result", {
-        "name": call.name, "tool_call_id": tool_call_id, "status": 200,
-        "ms": _duration_ms(started_ns), "response": output,
-    })
-    # Only the six POST routes are submissions; a lookup is not a reported action.
-    if call.name in SUBMISSIONS:
-        await repository.record_submission(
-            call_id, SUBMISSIONS[call.name][1], call.arguments, 200, {"output": output}
-        )
-    _record_success(call_id, call.name, call.arguments, output)
+    await repository.append_event(
+        call_id, "tool_result", {"name": call.name, "output": output}
+    )
+    emit(
+        call_id,
+        "tool_result",
+        {
+            "name": call.name,
+            "tool_call_id": tool_call_id,
+            "status": 200,
+            "ms": _duration_ms(started_ns),
+            "response": output,
+        },
+    )
+    await _record_submission(repository, call_id, clinic_tools.take_submission())
+    _sync_trusted_facts(state, call.name, output, call_id, step)
+    await _save_state(repository, call_id, state)
+    if call.name == "search_patients":
+        _record_unique_patient(call_id, output)
     return Operation(call.name, call.arguments, "executed", result=output)
+
+
+async def _record_submission(
+    repository: CallRepository,
+    call_id: str,
+    submission: SubmissionRecord | None,
+) -> None:
+    if submission is None:
+        return
+    await repository.record_submission(
+        call_id,
+        submission.action,
+        submission.payload,
+        submission.response_status,
+        submission.response,
+    )
+    emit(
+        call_id,
+        "submit",
+        {
+            "route": SUBMISSION_ROUTES[submission.action],
+            "status": submission.response_status,
+            "request": submission.payload,
+            "response": submission.response,
+        },
+    )
+    if submission.response_status == 200:
+        update_call(
+            call_id,
+            outcome=submission.action,
+            **_submission_fields(submission.action, submission.payload),
+        )
+
+
+def _submission_fields(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    if action in ("NO_ACTION", "ESCALATE"):
+        fields["reason"] = payload.get("reason")
+    if action == "BOOK":
+        fields["patient_id"] = payload.get("patient_id")
+    if "policy_id" in payload:
+        fields["insurer"] = payload["policy_id"]
+    if action == "REGISTER":
+        fields["patient_name"] = " ".join(
+            part
+            for part in (
+                payload.get("given_name"),
+                payload.get("first_surname"),
+                payload.get("second_surname"),
+            )
+            if part
+        )
+        fields["insurer"] = payload.get("insurer")
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _sync_trusted_facts(
+    state: CallGraph, tool_name: str, output: Any, call_id: str, step: int
+) -> None:
+    if tool_name.startswith("prepare_") and isinstance(output, Mapping):
+        for key in ("request_id", "proposal_id"):
+            value = output.get(key)
+            if not isinstance(value, str):
+                continue
+            state.facts[key] = value
+            emit(
+                call_id,
+                "fact_recorded",
+                {
+                    "turn": state.turn,
+                    "step": step,
+                    "stage": state.stage_id,
+                    "key": key,
+                    "value": value,
+                },
+            )
+    elif tool_name in ("revise_request", "confirm_action"):
+        state.facts.pop("proposal_id", None)
+
+
+async def _save_state(
+    repository: CallRepository, call_id: str, state: CallGraph
+) -> None:
+    projection = state.projection()
+    save_workflow = getattr(repository, "save_workflow", None)
+    if save_workflow is not None:
+        await save_workflow(call_id, projection)
+    await repository.append_event(
+        call_id, "request_context_updated", state.context.projection()
+    )
 
 
 async def _final_answer(
@@ -782,6 +1034,8 @@ def _tool_error_output(error: Exception, *, can_retry: bool) -> dict[str, Any]:
             "detail": error.detail,
             "instruction": (
                 "Correct the arguments using the tool schema and call the tool again."
+                if can_retry
+                else "Do not retry this submission. Correct the request and prepare a new action."
             ),
         }
     if isinstance(error, (TypeError, ValueError, LookupError)):

@@ -358,7 +358,9 @@ def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch)
                                 )
                             ],
                         ),
-                        AgentResponse(immediate_answer="Sorry, I could not look that up."),
+                        AgentResponse(
+                            immediate_answer="Sorry, I could not look that up."
+                        ),
                     ]
                 ),
             ),

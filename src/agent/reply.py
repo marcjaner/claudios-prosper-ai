@@ -28,7 +28,7 @@ class AgentReply(FrameProcessor):
         self.repository = repository
         self.started_at = time.monotonic()
         # Frozen for the call: saving in the builder must not move live ground.
-        self.state = state or CallGraph.start()
+        self.state = state or CallGraph.start(call_id=call_id)
         self.language = language or CallLanguage()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):

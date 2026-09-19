@@ -105,7 +105,7 @@ def create_transcription_agent(
                     is_database_initialized = True
         await repository.seed_default_guardrails()
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
-        state = CallGraph.start()
+        state = CallGraph.start(call_id=meta.call_id)
         language = CallLanguage()
         emit(
             meta.call_id,

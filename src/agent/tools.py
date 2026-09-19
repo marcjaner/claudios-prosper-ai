@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any, Literal, get_args, get_origin, get_type_hints
 
-from .clinic_api import ClinicApi
+from .call_context import ActionProposal, CallContext
+from .clinic_api import ClinicApi, ProsperApiError
 from .clinic_models import (
     BookRequest,
     CancelRequest,
@@ -86,9 +88,43 @@ InsurerId = Literal[
 AppointmentWindow = Literal["upcoming", "past", "all"]
 
 
+@dataclass
+class SubmissionRecord:
+    action: str
+    payload: dict[str, Any]
+    response_status: int | None = None
+    response: dict[str, Any] | None = None
+
+
 class ClinicTools:
-    def __init__(self, api: ClinicApi, call_id: str) -> None:
-        self._api, self._call_id = api, call_id
+    def __init__(self, api: ClinicApi, context: CallContext) -> None:
+        self._api = api
+        self._context = context
+        self._submission: SubmissionRecord | None = None
+
+    def functions(self) -> list[Callable[..., Any]]:
+        return [
+            getattr(self, name)
+            for name in (
+                "get_clinic_catalogue",
+                "search_patients",
+                "get_patient_appointments",
+                "search_availability",
+                "register_patient",
+                "prepare_booking",
+                "prepare_reschedule",
+                "prepare_cancellation",
+                "confirm_action",
+                "get_call_state",
+                "revise_request",
+                "submit_no_action",
+                "escalate_to_human",
+            )
+        ]
+
+    def take_submission(self) -> SubmissionRecord | None:
+        submission, self._submission = self._submission, None
+        return submission
 
     def search_patients(
         self,
@@ -97,33 +133,80 @@ class ClinicTools:
         phone: str | None = None,
         date_of_birth: DateValue | None = None,
     ) -> dict[str, Any]:
-        """Find patients by the exact identifiers collected from the caller."""
-        return self._api.search_patients(
-            name=name, national_id=national_id, phone=phone, date_of_birth=date_of_birth
+        """Find a patient; exactly one match verifies its patient_id for this call."""
+        response = self._api.search_patients(
+            name=name,
+            national_id=national_id,
+            phone=phone,
+            date_of_birth=date_of_birth,
         )
+        self._context.record_patient_lookup(response)
+        return response
 
     def get_clinic_catalogue(self) -> dict[str, Any]:
-        """Return specialties, providers, locations, appointment types, and policies with their IDs."""
+        """Return current clinic specialties, providers, locations, types, and plans."""
         return self._api.get_clinic()
 
     def get_patient_appointments(
-        self, patient_id: PatientId, when: AppointmentWindow = "upcoming"
+        self,
+        patient_id: PatientId,
+        when: AppointmentWindow = "upcoming",
+        request_id: str | None = None,
+        new_request: bool = False,
     ) -> dict[str, Any]:
-        """Return a patient's appointments. Only upcoming appointments can be changed."""
-        return self._api.get_patient_appointments(patient_id, when=when)
+        """Retrieve appointments into one request; use appointment_ref for changes."""
+        request = self._context.select_request(
+            patient_id, request_id=request_id, new_request=new_request
+        )
+        revision = request.revision
+        response = self._api.get_patient_appointments(patient_id, when=when)
+        appointments = response.get("appointments", [])
+        if not isinstance(appointments, list):
+            raise TypeError("invalid_appointments_response")
+        result = dict(response)
+        if when == "upcoming":
+            result["appointments"] = self._context.install_appointments(
+                request, appointments, expected_revision=revision
+            )
+        else:
+            result["appointments"] = [
+                {
+                    key: value
+                    for key, value in appointment.items()
+                    if key != "appointment_id"
+                }
+                for appointment in appointments
+                if isinstance(appointment, dict)
+            ]
+        result["request_id"] = request.request_id
+        return result
 
     def search_availability(
         self,
         date_from: AvailabilityStartDate,
         date_to: AvailabilityEndDate,
+        patient_id: PatientId,
         provider_id: ProviderId | None = None,
         specialty_id: SpecialtyId | None = None,
         location_id: LocationId | None = None,
-        patient_id: PatientId | None = None,
         insurers: list[InsurerId] | None = None,
+        request_id: str | None = None,
+        new_request: bool = False,
     ) -> dict[str, Any]:
-        """Return bookable slots and blocked reasons. Use either provider_id or specialty_id, exact catalogue IDs, and no more than 14 inclusive days."""
-        return self._api.search_availability(
+        """Find real slots for one request; use returned slot_id to prepare an action."""
+        request = self._context.select_request(
+            patient_id, request_id=request_id, new_request=new_request
+        )
+        revision = request.revision
+        criteria = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "provider_id": provider_id,
+            "specialty_id": specialty_id,
+            "location_id": location_id,
+            "insurers": insurers,
+        }
+        response = self._api.search_availability(
             date_from=date_from,
             date_to=date_to,
             provider_id=provider_id,
@@ -132,6 +215,15 @@ class ClinicTools:
             patient_id=patient_id,
             insurers=insurers,
         )
+        slots = response.get("slots", [])
+        if not isinstance(slots, list):
+            raise TypeError("invalid_availability_response")
+        result = dict(response)
+        result["slots"] = self._context.install_slots(
+            request, criteria, slots, expected_revision=revision
+        )
+        result["request_id"] = request.request_id
+        return result
 
     def register_patient(
         self,
@@ -145,75 +237,128 @@ class ClinicTools:
         insurer: InsurerId,
     ) -> dict[str, Any]:
         """Register a caller missing from the directory. Do not book them too."""
-        return self._api.register_patient(
-            RegisterPatientRequest(
-                call_id=self._call_id,
-                given_name=given_name,
-                first_surname=first_surname,
-                second_surname=second_surname,
-                national_id=national_id,
-                date_of_birth=date_of_birth,
-                phone=phone,
-                email=email,
-                insurer=insurer,
-            )
+        request = RegisterPatientRequest(
+            call_id=self._context.call_id,
+            given_name=given_name,
+            first_surname=first_surname,
+            second_surname=second_surname,
+            national_id=national_id,
+            date_of_birth=date_of_birth,
+            phone=phone,
+            email=email,
+            insurer=insurer,
         )
+        return self._submit_direct("REGISTER", request, self._api.register_patient)
 
-    def book_appointment(
-        self,
-        patient_id: PatientId,
-        provider_id: ProviderId,
-        location_id: LocationId,
-        appointment_type_id: AppointmentTypeId,
-        slot: DateTimeValue,
-        policy_id: InsurerId,
+    def prepare_booking(self, slot_id: str, policy_id: InsurerId) -> dict[str, Any]:
+        """Freeze a booking from stored slot evidence without submitting it."""
+        return self._proposal_result(self._context.prepare_booking(slot_id, policy_id))
+
+    def prepare_reschedule(
+        self, appointment_ref: str, slot_id: str, policy_id: InsurerId
     ) -> dict[str, Any]:
-        """Submit a booking using IDs and a slot returned by Prosper."""
-        return self._api.book(
-            BookRequest(
-                call_id=self._call_id,
-                patient_id=patient_id,
-                provider_id=provider_id,
-                location_id=location_id,
-                appointment_type_id=appointment_type_id,
-                slot=slot,
-                policy_id=policy_id,
-            )
+        """Freeze a move from same-request appointment and slot evidence."""
+        proposal = self._context.prepare_reschedule(appointment_ref, slot_id, policy_id)
+        return self._proposal_result(proposal)
+
+    def prepare_cancellation(self, appointment_ref: str) -> dict[str, Any]:
+        """Freeze a cancellation from a retrieved upcoming appointment."""
+        return self._proposal_result(
+            self._context.prepare_cancellation(appointment_ref)
         )
 
-    def reschedule_appointment(
-        self,
-        appointment_id: AppointmentId,
-        provider_id: ProviderId,
-        location_id: LocationId,
-        slot: DateTimeValue,
-        policy_id: InsurerId,
+    def confirm_action(
+        self, proposal_id: str, confirmed: bool = True
     ) -> dict[str, Any]:
-        """Move an existing upcoming appointment to a returned slot."""
-        return self._api.reschedule(
-            RescheduleRequest(
-                call_id=self._call_id,
-                appointment_id=appointment_id,
-                provider_id=provider_id,
-                location_id=location_id,
-                slot=slot,
-                policy_id=policy_id,
-            )
-        )
+        """Submit a prepared action only after confirmation in a later caller turn."""
+        proposal = self._context.begin_submission(proposal_id, confirmed)
+        self._submission = SubmissionRecord(proposal.action, dict(proposal.payload))
+        try:
+            response = self._post_proposal(proposal)
+        except ProsperApiError as exc:
+            result = {"detail": exc.detail}
+            self._submission.response_status = exc.status_code
+            self._submission.response = result
+            self._context.reject_submission(proposal_id, result)
+            raise
+        except Exception:
+            self._context.mark_submission_uncertain(proposal_id)
+            raise
+        self._submission.response_status = 200
+        self._submission.response = response
+        self._context.accept_submission(proposal_id, response)
+        return {
+            "proposal_id": proposal_id,
+            "request_id": proposal.request_id,
+            "action": proposal.action,
+            "submitted": True,
+            "status": self._context.proposals[proposal_id].status,
+            "result": response,
+        }
 
-    def cancel_appointment(self, appointment_id: AppointmentId) -> dict[str, Any]:
-        """Cancel one existing upcoming appointment."""
-        return self._api.cancel(
-            CancelRequest(call_id=self._call_id, appointment_id=appointment_id)
-        )
+    def get_call_state(self) -> dict[str, Any]:
+        """Return request IDs, evidence references, and proposal statuses for this call."""
+        return self._context.projection()
+
+    def revise_request(self, request_id: str) -> dict[str, Any]:
+        """Discard this request's slots and unsubmitted proposals before a correction."""
+        request = self._context.revise_request(request_id)
+        return {
+            "request_id": request.request_id,
+            "revision": request.revision,
+            "status": request.status,
+            "instruction": "Search again with this request_id and corrected criteria.",
+        }
 
     def submit_no_action(self, reason: OutcomeReason) -> dict[str, Any]:
         """Record why the clinic correctly cannot complete this request."""
-        return self._api.no_action(OutcomeRequest(call_id=self._call_id, reason=reason))
+        request = OutcomeRequest(call_id=self._context.call_id, reason=reason)
+        return self._submit_direct("NO_ACTION", request, self._api.no_action)
 
     def escalate_to_human(self, reason: OutcomeReason) -> dict[str, Any]:
         """Escalate the call, especially a medical emergency, without booking."""
-        return self._api.escalate(OutcomeRequest(call_id=self._call_id, reason=reason))
+        request = OutcomeRequest(call_id=self._context.call_id, reason=reason)
+        return self._submit_direct("ESCALATE", request, self._api.escalate)
+
+    def _post_proposal(self, proposal: ActionProposal) -> dict[str, Any]:
+        if proposal.action == "BOOK":
+            return self._api.book(BookRequest(**proposal.payload))
+        if proposal.action == "RESCHEDULE":
+            return self._api.reschedule(RescheduleRequest(**proposal.payload))
+        return self._api.cancel(CancelRequest(**proposal.payload))
+
+    def _submit_direct(
+        self, action: str, request: Any, submit: Callable
+    ) -> dict[str, Any]:
+        payload = request.model_dump(mode="json")
+        self._submission = SubmissionRecord(action, payload)
+        try:
+            response = submit(request)
+        except ProsperApiError as exc:
+            self._submission.response_status = exc.status_code
+            self._submission.response = {"detail": exc.detail}
+            raise
+        self._submission.response_status = 200
+        self._submission.response = response
+        return response
+
+    @staticmethod
+    def _proposal_result(proposal: ActionProposal) -> dict[str, Any]:
+        details = {
+            key: value for key, value in proposal.payload.items() if key != "call_id"
+        }
+        return {
+            "proposal_id": proposal.proposal_id,
+            "request_id": proposal.request_id,
+            "action": proposal.action,
+            "details": details,
+            "readback": ", ".join(f"{key}: {value}" for key, value in details.items()),
+            "submitted": False,
+            "instruction": (
+                "Read back these exact details and wait for a new caller turn "
+                "before confirm_action."
+            ),
+        }
 
 
 CLINIC_TOOL_NAMES = (
@@ -222,28 +367,28 @@ CLINIC_TOOL_NAMES = (
     "get_patient_appointments",
     "search_availability",
     "register_patient",
-    "book_appointment",
-    "reschedule_appointment",
-    "cancel_appointment",
+    "prepare_booking",
+    "prepare_reschedule",
+    "prepare_cancellation",
+    "confirm_action",
+    "get_call_state",
+    "revise_request",
     "submit_no_action",
     "escalate_to_human",
 )
 
+
+# Tools that POST a record to Prosper. A failed one may still have been received,
+# which is what makes retrying it dangerous; a failed lookup carries no such doubt.
 SUBMISSION_TOOL_NAMES = frozenset(
-    {
-        "register_patient",
-        "book_appointment",
-        "reschedule_appointment",
-        "cancel_appointment",
-        "submit_no_action",
-        "escalate_to_human",
-    }
+    {"register_patient", "confirm_action", "submit_no_action", "escalate_to_human"}
 )
 
 
-def create_clinic_tools(api: ClinicApi, call_id: str) -> list[Callable[..., Any]]:
-    tools = ClinicTools(api, call_id)
-    return [getattr(tools, name) for name in CLINIC_TOOL_NAMES]
+def create_clinic_tools(
+    api: ClinicApi, call_id: str, context: CallContext | None = None
+) -> list[Callable[..., Any]]:
+    return ClinicTools(api, context or CallContext(call_id)).functions()
 
 
 def load_tools(functions: list[Callable[..., Any]]) -> dict[str, Tool]:

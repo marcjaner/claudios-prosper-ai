@@ -25,6 +25,12 @@ const TOOL_ACTIONS = {
   book_appointment: "Creating a booking",
   reschedule_appointment: "Rescheduling an appointment",
   cancel_appointment: "Cancelling an appointment",
+  prepare_booking: "Preparing a booking",
+  prepare_reschedule: "Preparing an appointment change",
+  prepare_cancellation: "Preparing a cancellation",
+  confirm_action: "Submitting the confirmed action",
+  get_call_state: "Checking the active request",
+  revise_request: "Revising the request",
   submit_no_action: "Closing the request",
   escalate_to_human: "Escalating to clinic staff",
 };
@@ -35,6 +41,10 @@ const STAGE_ACTIONS = {
   atender: "Understanding the request",
   reservar: "Creating a booking",
   modificar: "Changing an appointment",
+  preparar_reserva: "Preparing a booking",
+  preparar_cambio: "Preparing an appointment change",
+  preparar_cancelacion: "Preparing a cancellation",
+  confirmar: "Waiting for confirmation",
 };
 
 function useNow(intervalMs = 250) {

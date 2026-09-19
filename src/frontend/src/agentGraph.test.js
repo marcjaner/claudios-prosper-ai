@@ -29,16 +29,33 @@ const SUCCESS_TITLES = {
   book_appointment: "Se ha reservado una cita",
   reschedule_appointment: "Se ha cambiado la cita",
   cancel_appointment: "Se ha cancelado la cita",
+  prepare_booking: "Reserva preparada, pendiente de confirmación",
+  prepare_reschedule: "Cambio preparado, pendiente de confirmación",
+  prepare_cancellation: "Cancelación preparada, pendiente de confirmación",
+  confirm_action: "Se ha confirmado la acción solicitada",
+  get_call_state: "Se ha consultado el estado de la solicitud",
+  revise_request: "Se ha reabierto la solicitud",
   submit_no_action: "No se ha realizado ninguna acción",
   escalate_to_human: "Se ha solicitado la intervención del personal del centro",
 };
 
-test("all ten clinical actions use readable Spanish instead of tool names", () => {
+test("all clinical actions use readable Spanish instead of tool names", () => {
   for (const [name, title] of Object.entries(SUCCESS_TITLES)) {
     const [action] = buildAgentActions(completed(name, 1));
     assert.equal(action.title, title);
     assert.equal(action.state, "success");
     assert.doesNotMatch(action.title + action.description + getActionLabel(name), /_/);
+  }
+});
+
+test("confirmed actions show the actual evidence-backed outcome", () => {
+  for (const [action, title] of Object.entries({
+    BOOK: "Se ha reservado una cita",
+    RESCHEDULE: "Se ha cambiado la cita",
+    CANCEL: "Se ha cancelado una cita",
+  })) {
+    const [entry] = buildAgentActions(completed("confirm_action", 1, { action }));
+    assert.equal(entry.title, title);
   }
 });
 
