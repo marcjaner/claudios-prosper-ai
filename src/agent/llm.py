@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import logging
-from functools import lru_cache
 import os
 import time
-from typing import Any, Generic, TypeVar, cast
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any, cast
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -16,11 +16,10 @@ from pydantic import BaseModel, ValidationError
 
 from agent.utils import load_environment
 
-T = TypeVar("T", bound=BaseModel)
-
 _logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "deepseek-v4-flash"
+
 
 @dataclass(frozen=True)
 class Completion:
@@ -28,10 +27,26 @@ class Completion:
     sources: list[str]
     usage: Usage
 
+
 @dataclass(frozen=True)
-class StructuredCompletion(Generic[T]):
+class StructuredCompletion[T: BaseModel]:
     data: T
     usage: Usage
+
+
+@dataclass(frozen=True)
+class LLMToolCall:
+    call_id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCompletion:
+    text: str
+    tool_calls: list[LLMToolCall]
+    usage: Usage
+
 
 @dataclass(frozen=True)
 class Usage:
@@ -49,6 +64,10 @@ class Usage:
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
             cached_tokens=self.cached_tokens + other.cached_tokens,
         )
+
+
+class LLMResponseError(RuntimeError):
+    pass
 
 
 class LLMClient:
@@ -186,11 +205,13 @@ class LLMClient:
         """
         for attempt in range(self.max_retries + 1):
             try:
-                _logger.debug("Sending completion request model=%s attempt=%d", model, attempt + 1)
+                _logger.debug(
+                    "Sending completion request model=%s attempt=%d", model, attempt + 1
+                )
                 return client.chat.completions.create(**cast(Any, kwargs))
             except json.JSONDecodeError as exc:
                 if attempt >= self.max_retries:
-                    raise Exception(
+                    raise LLMResponseError(
                         "Provider returned malformed JSON "
                         f"for model {model!r} after {attempt + 1} attempts."
                     ) from exc
@@ -237,7 +258,7 @@ class LLMClient:
             usage=self._usage_from(response.usage),
         )
 
-    def complete_structured(
+    def complete_structured[T: BaseModel](
         self,
         prompt: str,
         schema: type[T],
@@ -266,16 +287,61 @@ class LLMClient:
         }
 
         response = self._create_chat_completion(client, kwargs, model=resolved_model)
-        _logger.info("Received structured completion model=%s schema=%s", resolved_model, schema.__name__)
+        _logger.info(
+            "Received structured completion model=%s schema=%s",
+            resolved_model,
+            schema.__name__,
+        )
         content = response.choices[0].message.content or ""
         try:
             data = schema.model_validate_json(content)
         except (ValidationError, json.JSONDecodeError) as exc:
-            raise Exception(
+            raise LLMResponseError(
                 f"Model response did not validate against {schema.__name__}."
             ) from exc
 
         return StructuredCompletion(data=data, usage=self._usage_from(response.usage))
+
+    def complete_with_tools(
+        self,
+        prompt: str,
+        tools: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> ToolCompletion:
+        """Run a completion and return native function calls from the message."""
+        resolved_model = model or self.default_model
+        client = self._get_client(resolved_model)
+        kwargs: Any = self._common_create_kwargs(
+            prompt, resolved_model, temperature, max_tokens
+        )
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+        response = self._create_chat_completion(client, kwargs, model=resolved_model)
+        message = response.choices[0].message
+        tool_calls = []
+        for call in message.tool_calls or []:
+            if call.type != "function":
+                continue
+            arguments = json.loads(call.function.arguments)
+            if not isinstance(arguments, dict):
+                raise TypeError(
+                    f"Tool arguments for {call.function.name} must be an object."
+                )
+            tool_calls.append(
+                LLMToolCall(
+                    call_id=call.id,
+                    name=call.function.name,
+                    arguments=arguments,
+                )
+            )
+        return ToolCompletion(
+            text=message.content or "",
+            tool_calls=tool_calls,
+            usage=self._usage_from(response.usage),
+        )
 
 
 @lru_cache(maxsize=1)
