@@ -44,20 +44,6 @@ function OutcomeCell({ call }) {
   );
 }
 
-function ScoringCell({ call }) {
-  if (call.score_overall != null) {
-    return (
-      <span className="inline-block rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs tabular-nums text-slate-200">
-        {Math.round(call.score_overall)}
-      </span>
-    );
-  }
-  if (call.score_error) {
-    return <span className="font-mono text-xs text-rose-400">error</span>;
-  }
-  return <span className="text-slate-600">—</span>;
-}
-
 export default function History() {
   const [calls, setCalls] = useState([]);
   const [stats, setStats] = useState(null);
@@ -254,7 +240,6 @@ export default function History() {
               <th className="px-4 py-2 font-medium">Duración</th>
               <th className="px-4 py-2 font-medium">Paciente</th>
               <th className="px-4 py-2 font-medium">Resultado</th>
-              <th className="px-4 py-2 font-medium">Score</th>
               <th className="px-4 py-2 font-medium">Primera voz</th>
               <th className="px-4 py-2 font-medium">Coste</th>
               <th className="px-4 py-2 font-medium">Seguro</th>
@@ -292,9 +277,6 @@ export default function History() {
                   {call.error && (
                     <p className="mt-0.5 truncate text-xs text-rose-400">{call.error}</p>
                   )}
-                </td>
-                <td className="px-4 py-2">
-                  <ScoringCell call={call} />
                 </td>
                 <td className="px-4 py-2 font-mono tabular-nums text-slate-400">
                   {call.ttfa_seconds == null ? "—" : `${call.ttfa_seconds.toFixed(2)}s`}

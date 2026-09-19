@@ -3,3 +3,12 @@
 :root {
   color-scheme: dark;
 }
+
+.call-panel {
+  @apply flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900/50;
+  height: clamp(36rem, calc(100dvh - 21rem), 44rem);
+}
+
+.call-panel-header {
+  @apply flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-800/70 px-4 py-3;
+}
