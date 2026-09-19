@@ -15,6 +15,8 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.workers.runner import WorkerRunner
 
+from observability import emit, update_call
+
 from .handshake import CallMeta, read_handshake
 from .recording import create_call_artifacts
 from .serializer import create_serializer
@@ -38,17 +40,19 @@ class CallMetrics:
     first_audio_out_at: float | None = None
     audio_out_bytes: int = 0
 
+    @property
+    def time_to_first_audio(self) -> float | None:
+        if self.first_audio_out_at is None:
+            return None
+        return round(self.first_audio_out_at - self.started_at, 3)
+
     def summary(self) -> dict:
         # Silence from us is attributed to us and fails the case, so time to
         # first audio is the number worth watching on every call.
         return {
             "call_id": self.call_id,
             "duration_seconds": round(time.monotonic() - self.started_at, 3),
-            "time_to_first_audio_seconds": (
-                None
-                if self.first_audio_out_at is None
-                else round(self.first_audio_out_at - self.started_at, 3)
-            ),
+            "time_to_first_audio_seconds": self.time_to_first_audio,
             "audio_out_seconds": round(self.audio_out_bytes / (TTS_SAMPLE_RATE * 2), 3),
         }
 
@@ -75,6 +79,7 @@ class OutboundAudioTap(FrameProcessor):
         ):
             if self._call_metrics.first_audio_out_at is None:
                 self._call_metrics.first_audio_out_at = time.monotonic()
+                update_call(self._call_metrics.call_id, state="speaking")
             self._call_metrics.audio_out_bytes += len(frame.audio)
         await self.push_frame(frame, direction)
 
@@ -112,6 +117,15 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
     metrics = CallMetrics(call_id=meta.call_id, started_at=time.monotonic())
     artifacts = None
     outcome = "completed"
+    failure: str | None = None
+    # connected_at is wall clock; CallMetrics.started_at is monotonic and means
+    # nothing to a browser drawing a duration ring.
+    update_call(
+        meta.call_id,
+        started_at=meta.connected_at.timestamp(),
+        state="connected",
+        from_number=meta.from_number,
+    )
 
     try:
         transport = create_transport(websocket, meta)
@@ -153,11 +167,23 @@ async def run_call(websocket, build_agent: AgentFactory) -> None:
         await asyncio.wait_for(runner.run(), timeout=MAX_CALL_SECONDS)
     except TimeoutError:
         outcome = "timeout"
+        failure = f"call exceeded {MAX_CALL_SECONDS}s"
         logger.error("call exceeded {}s | call_id={}", MAX_CALL_SECONDS, meta.call_id)
-    except Exception:  # noqa: BLE001 - one call must never take down the others
+    except Exception as error:  # noqa: BLE001 - one call must never take down the others
         outcome = "failed"
+        failure = str(error)
         logger.exception("call failed | call_id={}", meta.call_id)
     finally:
         if artifacts:
             artifacts.finish(outcome, metrics.summary())
         metrics.log()
+        # Teardown runs under cancellation, so anything that must be recorded
+        # belongs here rather than in a pipeline event handler.
+        update_call(
+            meta.call_id,
+            ended_at=time.time(),
+            state="ended",
+            ttfa_seconds=metrics.time_to_first_audio,
+            error=failure,
+        )
+        emit(meta.call_id, "call_ended", {"error": failure})

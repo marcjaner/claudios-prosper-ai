@@ -42,6 +42,10 @@ where = ["src"]
 [tool.setuptools.package-data]
 claudios_prosper_ai = ["prompts/*.yaml"]
 
+[tool.ruff]
+# The dashboard is a Vite app, not Python.
+extend-exclude = ["src/frontend"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src", "scripts"]
 testpaths = ["tests"]
