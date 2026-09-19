@@ -19,6 +19,12 @@ export const OUTCOMES = {
 };
 
 export const HISTORY_RANGES = [
+  { value: "15m", label: "Last 15 minutes", minutes: 15 },
+  { value: "1h", label: "Last hour", minutes: 60 },
+  { value: "3h", label: "Last 3 hours", minutes: 180 },
+  { value: "6h", label: "Last 6 hours", minutes: 360 },
+  { value: "12h", label: "Last 12 hours", minutes: 720 },
+  { value: "24h", label: "Last 24 hours", minutes: 1440 },
   { value: "7", label: "Last 7 days" },
   { value: "14", label: "Last 14 days" },
   { value: "30", label: "Last 30 days" },
@@ -28,7 +34,13 @@ export const HISTORY_RANGES = [
 ];
 
 export function historyDateRange(range, now = new Date()) {
-  if (range === "all") return { date_from: "", date_to: "" };
+  const empty = { date_from: "", date_to: "", started_after: "", started_before: "" };
+  if (range === "all" || range === "custom") return empty;
+  const minutes = HISTORY_RANGES.find(({ value }) => value === range)?.minutes;
+  if (minutes) {
+    const end = now.getTime() / 1000;
+    return { ...empty, started_after: end - minutes * 60, started_before: end };
+  }
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-GB", {
       timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit",
@@ -37,7 +49,7 @@ export function historyDateRange(range, now = new Date()) {
   const date_to = `${parts.year}-${parts.month}-${parts.day}`;
   const start = new Date(`${date_to}T00:00:00Z`);
   start.setUTCDate(start.getUTCDate() - Number(range) + 1);
-  return { date_from: start.toISOString().slice(0, 10), date_to };
+  return { ...empty, date_from: start.toISOString().slice(0, 10), date_to };
 }
 
 export function outcomeStyle(outcome) {

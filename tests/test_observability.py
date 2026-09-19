@@ -268,6 +268,8 @@ def test_stats_summarise_the_history(store):
     stats = store.stats()
     assert stats["calls"] == 3
     assert stats["failed"] == 1
+    assert stats["success_pct"] == 66.7
+    assert stats["bookings_pct"] == 66.7
     assert stats["ttfa_p50"] == 0.4
     assert stats["ttfa_p95"] == 0.8
     assert {o["outcome"]: o["count"] for o in stats["outcomes"]} == {
@@ -526,3 +528,42 @@ def test_histogram_filtered_totals_match_table(store):
     buckets = store.histogram(**filters)["buckets"]
     assert sum(b["total"] for b in buckets) == len(store.list_calls(**filters)) == 1
     assert sum(b["outcomes"]["CANCEL"] for b in buckets) == 1
+
+
+@pytest.mark.parametrize(
+    "minutes, interval",
+    [(15, 60), (60, 300), (180, 300), (360, 900), (720, 3600), (1440, 3600)],
+)
+def test_histogram_short_windows_filter_table_and_keep_empty_intervals(
+    store, minutes, interval
+):
+    end = datetime(2026, 9, 19, 10, tzinfo=CLINIC_TIMEZONE).timestamp()
+    start = end - minutes * 60
+    store.write(
+        [
+            CallUpdate(
+                call_id, {"started_at": ts, "ended_at": ts + 0.1, "outcome": "BOOK"}
+            )
+            for call_id, ts in [
+                ("BEFORE", start - 1),
+                ("START", start),
+                ("LAST", end - 1),
+                ("AFTER", end),
+            ]
+        ]
+    )
+    filters = {"started_after": start, "started_before": end, "ended_only": True}
+    assert {c["call_id"] for c in store.list_calls(**filters)} == {"START", "LAST"}
+    histogram = store.histogram(**filters)
+    assert histogram["bucket_seconds"] == interval
+    assert len(histogram["buckets"]) == minutes * 60 // interval
+    assert sum(b["total"] for b in histogram["buckets"]) == 2
+    assert histogram["buckets"][0]["total"] == 1
+    assert histogram["buckets"][-1]["total"] == 1
+
+
+def test_histogram_short_empty_window_preserves_minute_axis(store):
+    histogram = store.histogram(started_after=1800, started_before=2700)
+    assert histogram["bucket_seconds"] == 60
+    assert len(histogram["buckets"]) == 15
+    assert all(b["total"] == 0 for b in histogram["buckets"])

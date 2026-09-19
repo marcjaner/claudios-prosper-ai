@@ -48,14 +48,14 @@ export default function History() {
   const [calls, setCalls] = useState([]);
   const [stats, setStats] = useState(null);
   const [histogram, setHistogram] = useState(null);
-  const [range, setRange] = useState("7");
+  const [range, setRange] = useState("6h");
   const [filters, setFilters] = useState(() => ({
     q: "",
     outcome: "",
     reason: "",
     name: "",
     insurer: "",
-    ...historyDateRange("7"),
+    ...historyDateRange("6h"),
   }));
   const [query, setQuery] = useState("");
   const [nameQuery, setNameQuery] = useState("");
@@ -64,14 +64,17 @@ export default function History() {
 
   function changeRange(value) {
     setRange(value);
-    if (value !== "custom") {
-      setFilters((previous) => ({ ...previous, ...historyDateRange(value) }));
-    }
+    setFilters((previous) => ({
+      ...previous,
+      ...(value === "custom"
+        ? { started_after: "", started_before: "" }
+        : historyDateRange(value)),
+    }));
   }
 
   function changeDate(key, value) {
     setRange("custom");
-    setFilters((previous) => ({ ...previous, [key]: value }));
+    setFilters((previous) => ({ ...previous, started_after: "", started_before: "", [key]: value }));
   }
 
   useEffect(() => {
@@ -148,7 +151,7 @@ export default function History() {
 
       {stats && (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <StatTile label="Calls" value={stats.calls} hint={`${stats.live} active`} />
             <StatTile
               label="Cost"
@@ -158,11 +161,8 @@ export default function History() {
                 stats.avg_cost_eur ? `${stats.avg_cost_eur.toFixed(4)} € per call` : "Not measured"
               }
             />
-            <StatTile
-              label="With errors"
-              value={stats.failed}
-              hint={stats.calls ? `${Math.round((stats.failed / stats.calls) * 100)}%` : ""}
-            />
+            <StatTile label="Success calls" value={`${stats.success_pct.toFixed(1)}%`} hint="Resolved automatically" />
+            <StatTile label="Bookings" value={`${stats.bookings_pct.toFixed(1)}%`} hint="Of completed calls" />
           </div>
         </>
       )}
@@ -256,8 +256,7 @@ export default function History() {
                 reason: "",
                 name: "",
                 insurer: "",
-                date_from: "",
-                date_to: "",
+                ...historyDateRange("all"),
               });
             }}
             className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-500 hover:border-slate-300 hover:text-slate-800"

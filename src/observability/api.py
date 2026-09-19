@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -24,6 +31,8 @@ def register_dashboard(app: FastAPI) -> None:
         insurer: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        started_after: float | None = Query(default=None, ge=0, allow_inf_nan=False),
+        started_before: float | None = Query(default=None, ge=0, allow_inf_nan=False),
     ) -> dict:
         return {
             "calls": request.app.state.store.list_calls(
@@ -37,6 +46,8 @@ def register_dashboard(app: FastAPI) -> None:
                 insurer=insurer,
                 date_from=date_from,
                 date_to=date_to,
+                started_after=started_after,
+                started_before=started_before,
             )
         }
 
@@ -51,6 +62,8 @@ def register_dashboard(app: FastAPI) -> None:
         insurer: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        started_after: float | None = Query(default=None, ge=0, allow_inf_nan=False),
+        started_before: float | None = Query(default=None, ge=0, allow_inf_nan=False),
     ) -> dict:
         return request.app.state.store.histogram(
             outcome=outcome,
@@ -61,6 +74,8 @@ def register_dashboard(app: FastAPI) -> None:
             insurer=insurer,
             date_from=date_from,
             date_to=date_to,
+            started_after=started_after,
+            started_before=started_before,
         )
 
     @app.get("/api/stats")

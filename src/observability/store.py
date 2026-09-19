@@ -22,6 +22,7 @@ BROADCAST_ONLY = frozenset({"stt_partial"})
 # apart: a refusal with the right reason scores exactly like a booking.
 WROTE = ("BOOK", "RESCHEDULE", "CANCEL", "REGISTER")
 CLOSED = ("NO_ACTION", "ESCALATE")
+SUCCESSFUL = WROTE + ("NO_ACTION",)
 
 # Bar widths that read as time: a minute, five, a quarter, an hour, six, a day.
 BUCKET_LADDER = (60, 300, 900, 3600, 6 * 3600, DAY_SECONDS)
@@ -178,6 +179,8 @@ class Store:
         insurer: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        started_after: float | None = None,
+        started_before: float | None = None,
     ) -> tuple[str, list]:
         """The filter the table and the histogram share, so they cannot drift."""
         clauses, params = [], []
@@ -204,6 +207,12 @@ class Store:
         if date_to:
             clauses.append("started_at < ?")
             params.append(_day_start(date_to, offset=1))
+        if started_after is not None:
+            clauses.append("started_at >= ?")
+            params.append(started_after)
+        if started_before is not None:
+            clauses.append("started_at < ?")
+            params.append(started_before)
         if search:
             # Finding a phrase and landing on the call that said it is the
             # point of the history view, so search runs over what was spoken.
@@ -247,6 +256,14 @@ class Store:
                 _day_start(filters["date_to"], offset=1) - 0.001
                 if filters.get("date_to") else span["last"]
             )
+            if filters.get("started_after") is not None:
+                first = (
+                    max(first, filters["started_after"])
+                    if filters.get("date_from") else filters["started_after"]
+                )
+            if filters.get("started_before") is not None:
+                end = filters["started_before"] - 0.001
+                last = min(last, end) if filters.get("date_to") else end
             if first is None or last is None or first > last:
                 return {"bucket_seconds": BUCKET_LADDER[0], "buckets": []}
 
@@ -301,6 +318,18 @@ class Store:
                 "SELECT COALESCE(outcome, 'sin registrar') AS outcome, COUNT(*) AS count "
                 "FROM calls GROUP BY 1 ORDER BY count DESC"
             ).fetchall()
+            completed = connection.execute(
+                "SELECT COUNT(*) FROM calls WHERE ended_at IS NOT NULL"
+            ).fetchone()[0]
+            successful = connection.execute(
+                f"SELECT COUNT(*) FROM calls WHERE ended_at IS NOT NULL "
+                f"AND outcome IN ({_marks(SUCCESSFUL)})",
+                SUCCESSFUL,
+            ).fetchone()[0]
+            bookings = connection.execute(
+                "SELECT COUNT(*) FROM calls WHERE ended_at IS NOT NULL AND outcome = ?",
+                ("BOOK",),
+            ).fetchone()[0]
             latencies = [
                 row[0]
                 for row in connection.execute(
@@ -314,6 +343,8 @@ class Store:
             "failed": totals["failed"] or 0,
             "avg_cost_eur": totals["avg_cost"],
             "total_cost_eur": totals["total_cost"],
+            "success_pct": _percentage(successful, completed),
+            "bookings_pct": _percentage(bookings, completed),
             "outcomes": [dict(row) for row in outcomes],
             # The number that decides whether the agent sounds alive.
             "ttfa_p50": _percentile(latencies, 0.50),
@@ -359,6 +390,10 @@ class Store:
             }
             for row in rows
         ]
+
+
+def _percentage(part: int, total: int) -> float:
+    return round(part * 100 / total, 1) if total else 0.0
 
 
 def _percentile(values: list[float], fraction: float) -> float | None:
