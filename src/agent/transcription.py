@@ -2,14 +2,17 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from observability.frames import TTSRequestedFrame
 from storage import CallRepository, Database
 from stt import (
     DeepgramEndpointingStopStrategy,
@@ -25,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 USER_TURN_STOP_TIMEOUT_SECONDS = 6
+EMPTY_TURN_RECOVERY_MESSAGE = "Sorry, I lost the last part. Could you repeat it?"
 
 
 async def log_completed_turn(meta: CallMeta, content: str) -> None:
@@ -49,6 +53,14 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
         )
         if message.content:
             await on_completed_turn(meta, message.content)
+            return
+        logger.warning("empty user turn | call_id=%s", meta.call_id)
+        await _aggregator.push_frame(
+            TTSRequestedFrame(EMPTY_TURN_RECOVERY_MESSAGE), FrameDirection.DOWNSTREAM
+        )
+        await _aggregator.push_frame(
+            TTSSpeakFrame(EMPTY_TURN_RECOVERY_MESSAGE), FrameDirection.DOWNSTREAM
+        )
 
     return aggregator
 
