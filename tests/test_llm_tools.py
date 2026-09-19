@@ -60,4 +60,4 @@ def test_every_clinic_tool_has_a_description():
     tools = load_tools(create_clinic_tools(cast(ClinicApi, object()), "CA456"))
 
     assert tools
-    assert all(tool["definition"]["function"]["description"] for tool in tools.values())
+    assert all(tool.description for tool in tools.values())

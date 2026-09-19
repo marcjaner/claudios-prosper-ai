@@ -16,7 +16,7 @@ from pipecat.frames.frames import SystemFrame
 
 from agent.clinic_api import ClinicApi
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
-from agent.models import AgentResponse, ToolCall, ToolResult
+from agent.models import AgentResponse, Tool, ToolCall, ToolResult
 from agent.stage_runtime import (
     GO_TO_TOOL,
     GRAPH_TOOL_DEFINITIONS,
@@ -72,11 +72,11 @@ def _completion_prompt(prompt: str) -> str:
 
 
 def _completion(
-    prompt: str, client: LLMClient | None, tools: dict[str, dict[str, Any]]
+    prompt: str, client: LLMClient | None, tools: dict[str, Tool]
 ) -> AgentResponse:
     completion = (client or get_llm_client()).complete_with_tools(
         _completion_prompt(prompt),
-        [tool["definition"] for tool in tools.values()],
+        [tool.definition for tool in tools.values()],
     )
     return _agent_response(completion)
 
@@ -191,11 +191,7 @@ def run_agent(
     configure_logging()
     if (clinic_api is None) != (call_id is None):
         raise ValueError("clinic_api and call_id must be provided together")
-    tools = load_tools(
-        create_clinic_tools(clinic_api, call_id)
-        if clinic_api is not None and call_id is not None
-        else []
-    )
+    tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
     response = _completion(prompt, client, tools)
     yield response.immediate_answer
     for call in response.tool_calls:
@@ -204,7 +200,7 @@ def run_agent(
             yield ToolResult(name=call.name, output=f"Unknown tool: {call.name}")
             continue
         try:
-            output = tool["execute"](**call.arguments)
+            output = tool.execute(**call.arguments)
         except (TypeError, ValueError) as exc:
             output = f"Tool error: {exc}"
         yield ToolResult(name=call.name, output=output)
@@ -289,9 +285,9 @@ def _graph_prompt(state: CallGraph) -> str:
     return f"System prompt:\n{_system_prompt()}\n\n{render_context(state)}"
 
 
-def _offered_tools(state: CallGraph, tools: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _offered_tools(state: CallGraph, tools: dict[str, Tool]) -> list[dict[str, Any]]:
     """The stage's own tools, plus the graph's — go_to only where the stage has exits."""
-    offered = [tools[name]["definition"] for name in state.allowed_tools() if name in tools]
+    offered = [tools[name].definition for name in state.allowed_tools() if name in tools]
     for definition in GRAPH_TOOL_DEFINITIONS:
         if definition["function"]["name"] == GO_TO_TOOL and not state.has_exits():
             continue
@@ -379,7 +375,7 @@ def _refuse(
 async def _execute_batch(
     batch: Batch,
     state: CallGraph,
-    tools: dict[str, dict[str, Any]],
+    tools: dict[str, Tool],
     call_id: str,
     repository: CallRepository,
     event_sink: EventSink | None,
@@ -412,7 +408,7 @@ async def _execute_batch(
 async def _run_tool(
     call: Any,
     state: CallGraph,
-    tools: dict[str, dict[str, Any]],
+    tools: dict[str, Tool],
     call_id: str,
     repository: CallRepository,
     event_sink: EventSink | None,
@@ -429,7 +425,7 @@ async def _run_tool(
     )
     tool = tools[call.name]
     try:
-        output = await asyncio.to_thread(tool["execute"], **call.arguments)
+        output = await asyncio.to_thread(tool.execute, **call.arguments)
     except Exception as exc:  # noqa: BLE001 - a failed lookup is feedback, not the end of the turn
         await _emit_tool_error(
             event_sink, call.name, tool_call_id, started_ns, type(exc).__name__,

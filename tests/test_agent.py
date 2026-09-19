@@ -11,7 +11,7 @@ from agent.llm import (
     ToolCompletion,
     Usage,
 )
-from agent.models import AgentResponse
+from agent.models import AgentResponse, Tool
 from storage import CallRepository
 
 
@@ -100,10 +100,9 @@ def test_clinic_tool_does_not_block_event_loop(monkeypatch):
             )
 
     tools = {
-        "search_patients": {
-            "definition": {},
-            "execute": slow_tool,
-        }
+        "search_patients": Tool(
+            name="search_patients", parameters={"type": "object"}, execute=slow_tool
+        )
     }
     monkeypatch.setattr(agent, "load_tools", lambda _functions: tools)
     monkeypatch.setattr(agent.ClinicApi, "from_environment", lambda: FakeClinicApi())

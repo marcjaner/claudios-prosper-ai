@@ -19,7 +19,7 @@ def available_tools() -> list[dict[str, str]]:
     """
     tools = load_tools(create_clinic_tools(cast(ClinicApi, None), ""))
     return [
-        {"name": name, "description": tool["definition"]["function"]["description"]}
+        {"name": name, "description": tool.description}
         for name, tool in tools.items()
     ]
 
