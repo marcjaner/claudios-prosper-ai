@@ -353,10 +353,12 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "greenlet" },
+    { name = "httpx" },
     { name = "openai" },
     { name = "pipecat-ai", extra = ["deepgram", "websocket"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -373,10 +375,12 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "greenlet", specifier = ">=3.5.6" },
+    { name = "httpx", specifier = ">=0.28.0" },
     { name = "openai", specifier = ">=2.30.0" },
     { name = "pipecat-ai", extras = ["cartesia", "deepgram", "openai", "silero", "websocket"], specifier = ">=1.11.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", specifier = ">=2.0.54" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.53.0" },
 ]

@@ -11,7 +11,8 @@ import yaml
 
 from agent.llm import LLMClient
 from agent.models import AgentResponse, ToolResult
-from agent.tools import clinic_hours, find_available_slots, load_tools
+from agent.clinic_api import ClinicApi
+from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
 
 _logger = logging.getLogger(__name__)
@@ -29,12 +30,20 @@ def _system_prompt() -> str:
         return yaml.safe_load(file)["system"]
 
 
-def run_agent(prompt: str, client: LLMClient | None = None) -> Iterator[str | ToolResult]:
+def run_agent(
+    prompt: str,
+    client: LLMClient | None = None,
+    *,
+    clinic_api: ClinicApi | None = None,
+    call_id: str | None = None,
+) -> Iterator[str | ToolResult]:
     """Yield the immediate answer, then yield each tool result as it completes."""
     configure_logging()
     _logger.info("Starting agent run")
     _logger.debug("Caller prompt: %s", prompt)
-    tools = load_tools([find_available_slots, clinic_hours])
+    if (clinic_api is None) != (call_id is None):
+        raise ValueError("clinic_api and call_id must be provided together")
+    tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
     message = (
         f"System prompt:\n{_system_prompt()}\n\n"
         f"Memory:\n{retrieve_memory()}\n\n"
