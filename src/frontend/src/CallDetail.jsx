@@ -112,6 +112,7 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
             </span>
           )}
           {call.reason && <span className="max-w-sm text-xs leading-relaxed text-slate-500">{getActionReason(call.reason)}</span>}
+          {call.guardrail_breached && <span className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800">Safety rule breached</span>}
         </div>
       </header>
 

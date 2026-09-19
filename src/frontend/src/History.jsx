@@ -37,6 +37,7 @@ function OutcomeCell({ call }) {
   const style = outcomeStyle(call.outcome);
   return (
     <span className="inline-flex items-center gap-1.5">
+      {call.guardrail_breached && <span title="Guardrail breached" className="text-amber-400">⚠</span>}
       <span style={{ backgroundColor: style.color }} className="h-2 w-2 rounded-full" />
       <span className="font-medium text-slate-700">{style.label}</span>
       {call.reason && <span className="text-xs text-slate-400">{call.reason}</span>}

@@ -4,6 +4,7 @@ from .jev import (
     QUESTIONS,
     SPOKEN_KINDS,
     build_state,
+    classify_guardrail_breach,
     run_scoring_worker,
     score_conversation,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "QUESTIONS",
     "SPOKEN_KINDS",
     "build_state",
+    "classify_guardrail_breach",
     "run_scoring_worker",
     "score_conversation",
 ]

@@ -10,16 +10,16 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-import yaml
+import httpx
 from pipecat.frames.frames import SystemFrame
 from pipecat.transcriptions.language import Language
 
 from agent.clinic_api import ClinicApi, ProsperApiError
+from agent.graph import load_graph
 from agent.language import DEFAULT_LANGUAGE, phrases, reply_instruction
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
@@ -43,6 +43,7 @@ from observability.frames import (
     ToolCallFinishedFrame,
     ToolCallStartedFrame,
 )
+from scoring import classify_guardrail_breach
 
 if TYPE_CHECKING:
     from storage import CallRepository
@@ -59,6 +60,7 @@ SENSITIVE_ARGUMENT_MARKERS = {
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
 CLINIC_TIMEZONE = ZoneInfo("Europe/Madrid")
+GUARDRAIL_REFUSAL = "I cannot help with that request. I can help you with your appointment."
 SUBMISSIONS = {
     "register_patient": ("/api/v1/submit/register", "REGISTER"),
     "book_appointment": ("/api/v1/submit/book", "BOOK"),
@@ -73,14 +75,9 @@ def retrieve_memory() -> str:
     return ""
 
 
-def _system_prompt() -> str:
-    with (Path(__file__).with_name("prompts.yaml")).open(encoding="utf-8") as file:
-        return yaml.safe_load(file)["system"]
-
-
 def _completion_prompt(prompt: str) -> str:
     return (
-        f"System prompt:\n{_system_prompt()}\n\n"
+        f"System prompt:\n{load_graph().system}\n\n"
         f"Memory:\n{retrieve_memory()}\n\nCaller input:\n{prompt}"
     )
 
@@ -397,6 +394,9 @@ async def run_agent_turn(
     state.start_turn()
     state.history.append(HistoryEntry(speaker="caller", text=prompt))
     await repository.append_event(call_id, "caller_text_received", {"text": prompt})
+    await repository.seed_default_guardrails()
+    guardrails = await repository.list_guardrails()
+    guardrail_text = "\n".join(f"- {row.title}: {row.description or row.text}" for row in guardrails)
 
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
@@ -410,6 +410,7 @@ async def run_agent_turn(
                 _graph_prompt(
                     state,
                     language=language,
+                    guardrails=guardrail_text,
                     seconds_remaining=_remaining_seconds(
                         seconds_remaining, turn_started_at
                     ),
@@ -419,6 +420,22 @@ async def run_agent_turn(
                 event_sink,
             )
             batch = _plan_batch(completion, state, call_id, step)
+            api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
+            if api_key and guardrails and completion.text.strip():
+                async with httpx.AsyncClient(timeout=15) as jev_client:
+                    classification = await classify_guardrail_breach(
+                        [{"speaker": "patient", "text": prompt}, {"speaker": "agent", "text": completion.text}],
+                        [f"{row.title}: {row.description or row.text}" for row in guardrails],
+                        jev_client, api_key,
+                    )
+                if classification["breached"]:
+                    violations = classification["violations"]
+                    reason = "; ".join(item["guardrail"].split(":", 1)[0] for item in violations)
+                    await repository.append_event(call_id, "guardrail_breach", {"reason": reason})
+                    update_call(call_id, guardrail_breached=1, guardrail_reason=reason,
+                                guardrail_violations=json.dumps(violations, ensure_ascii=False))
+                    yield AgentResponse(immediate_answer=GUARDRAIL_REFUSAL, tool_calls=[])
+                    return
             speech = _speech_for(completion, batch.refused, language)
             should_speak = bool(speech) and (
                 not completion.tool_calls or _send_immediate_responses()
@@ -471,7 +488,6 @@ def _send_immediate_responses() -> bool:
         "on",
     }
 
-
 def _remaining_seconds(initial: float | None, started_at: float) -> int | None:
     if initial is None:
         return None
@@ -505,11 +521,18 @@ def _with_call_budget(prompt: str, seconds_remaining: int | None) -> str:
 def _graph_prompt(
     state: CallGraph,
     language: Language = DEFAULT_LANGUAGE,
+    guardrails: str = "",
     seconds_remaining: int | None = None,
 ) -> str:
+    guardrail_prompt = (
+        f"\n\nConfigured guardrails (always follow):\n{guardrails}"
+        if guardrails
+        else ""
+    )
     current_date = datetime.now(CLINIC_TIMEZONE).date().isoformat()
     return _with_call_budget(
-        f"System prompt:\n{_system_prompt()}\n{reply_instruction(language)}\n\n"
+        f"System prompt:\n{state.graph.system}\n{reply_instruction(language)}"
+        f"{guardrail_prompt}\n\n"
         f"Current date in Europe/Madrid: {current_date}\n\n"
         f"{render_context(state)}",
         seconds_remaining,
@@ -740,7 +763,7 @@ async def _final_answer(
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
     response = await _observed_completion(
-        f"{_graph_prompt(state, language, seconds_remaining)}\n\n"
+        f"{_graph_prompt(state, language, seconds_remaining=seconds_remaining)}\n\n"
         "Answer the caller now using only what is above. Be concise, never mention "
         "internal tools or stages, and do not promise anything you have not already done.",
         client,

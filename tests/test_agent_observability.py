@@ -254,6 +254,12 @@ class FakeRepository:
         self.submissions = []
         self.workflow = dict(state or {})
 
+    async def seed_default_guardrails(self):
+        return None
+
+    async def list_guardrails(self):
+        return []
+
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
 

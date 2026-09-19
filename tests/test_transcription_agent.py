@@ -160,6 +160,9 @@ def test_concurrent_calls_initialize_the_shared_database_once(monkeypatch):
         def __init__(self, _database):
             self.call_ids = []
 
+        async def seed_default_guardrails(self):
+            return None
+
         async def create_call(self, call_id, *_args):
             self.call_ids.append(call_id)
 

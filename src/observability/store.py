@@ -48,6 +48,9 @@ CALL_FIELDS = (
     "score_overall",
     "score_json",
     "score_error",
+    "guardrail_breached",
+    "guardrail_reason",
+    "guardrail_violations",
 )
 
 COLUMN_AFFINITY = {"score_overall": "REAL"}
@@ -74,6 +77,7 @@ CREATE TABLE IF NOT EXISTS calls (
     score_overall REAL,
     score_json TEXT,
     score_error TEXT
+    ,guardrail_breached INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS events (

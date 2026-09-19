@@ -38,7 +38,12 @@ const RENDERED = new Set([
   "tool_result",
   "submit",
   "error",
+  "guardrail_breach",
 ]);
+
+function GuardrailBreach({ event }) {
+  return <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">Safety rule breach: {event.payload.reason}</div>;
+}
 
 function offset(event, startedAt) {
   const seconds = Math.max(0, event.ts - startedAt);
@@ -133,7 +138,7 @@ export default function Transcript({ events: incoming, startedAt, live }) {
               {offset(event, startedAt)}
             </span>
             <div className="min-w-0 flex-1">
-              {speaker ? (
+              {event.kind === "guardrail_breach" ? <GuardrailBreach event={event} /> : speaker ? (
                 <div className={`rounded-xl px-3.5 py-3 ${event.kind === "tts" ? "bg-emerald-50" : "bg-slate-50"}`}>
                   <p className={`mb-1 text-xs font-medium ${speaker.tone}`}>{speaker.who}</p>
                   <p className={`break-words leading-relaxed ${event.kind === "stt_partial" ? "text-slate-400 italic" : "text-slate-700"}`}>
