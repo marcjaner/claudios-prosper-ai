@@ -33,6 +33,30 @@ class Database:
         async with self.engine.begin() as connection:
             await connection.execute(text("PRAGMA journal_mode=WAL"))
             await connection.run_sync(Base.metadata.create_all)
+            await self._migrate_calls_table(connection)
+
+    @staticmethod
+    async def _migrate_calls_table(connection) -> None:
+        columns = {
+            row[1]
+            for row in (
+                await connection.execute(text("PRAGMA table_info(calls)"))
+            ).fetchall()
+        }
+        if "workflow_stage" not in columns:
+            await connection.execute(
+                text(
+                    "ALTER TABLE calls ADD COLUMN workflow_stage "
+                    "VARCHAR NOT NULL DEFAULT 'identify'"
+                )
+            )
+        if "workflow_state" not in columns:
+            await connection.execute(
+                text(
+                    "ALTER TABLE calls ADD COLUMN workflow_state "
+                    "JSON NOT NULL DEFAULT '{}'"
+                )
+            )
 
     def session(self) -> AsyncSession:
         return self.sessions()

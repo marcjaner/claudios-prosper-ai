@@ -15,7 +15,10 @@ from pipecat.frames.frames import SystemFrame
 
 from agent.clinic_api import ClinicApi
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
-from agent.models import AgentResponse, ToolCall, ToolResult
+from agent.models import AgentResponse, Tool, ToolCall, ToolResult
+from agent.tools import create_clinic_tools, load_tools
+from agent.utils import configure_logging
+from agent.workflow import available_tools, update_state
 from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
 from observability.frames import (
@@ -60,11 +63,11 @@ def _completion_prompt(prompt: str) -> str:
 
 
 def _completion(
-    prompt: str, client: LLMClient | None, tools: dict[str, dict[str, Any]]
+    prompt: str, client: LLMClient | None, tools: dict[str, Tool]
 ) -> AgentResponse:
     completion = (client or get_llm_client()).complete_with_tools(
         _completion_prompt(prompt),
-        [tool["definition"] for tool in tools.values()],
+        [tool.definition for tool in tools.values()],
     )
     return _agent_response(completion)
 
@@ -85,7 +88,7 @@ def _agent_response(completion: ToolCompletion) -> AgentResponse:
 async def _observed_tool_completion(
     prompt: str,
     client: LLMClient,
-    tools: dict[str, dict[str, Any]],
+    tools: dict[str, Tool],
     event_sink: EventSink | None,
 ) -> AgentResponse:
     request_id = uuid4().hex
@@ -96,7 +99,7 @@ async def _observed_tool_completion(
         completion = await asyncio.to_thread(
             client.complete_with_tools,
             _completion_prompt(prompt),
-            [tool["definition"] for tool in tools.values()],
+            [tool.definition for tool in tools.values()],
         )
     except Exception as exc:
         await _emit(
@@ -131,7 +134,7 @@ async def _observed_tool_completion(
 async def _observed_completion(
     prompt: str,
     client: LLMClient,
-    tools: dict[str, dict[str, Any]],
+    tools: dict[str, Tool],
     event_sink: EventSink | None,
 ) -> AgentResponse:
     request_id = uuid4().hex
@@ -143,7 +146,7 @@ async def _observed_completion(
             client.complete_structured,
             _completion_prompt(prompt),
             AgentResponse,
-            extra_body={"tools": [tool["definition"] for tool in tools.values()]},
+            extra_body={"tools": [tool.definition for tool in tools.values()]},
         )
     except Exception as exc:
         await _emit(
@@ -175,6 +178,11 @@ async def _observed_completion(
     return completion.data
 
 
+def _enabled_tools(tools: dict[str, Tool], state: dict[str, Any]) -> dict[str, Tool]:
+    enabled = available_tools(state)
+    return {name: tool for name, tool in tools.items() if name in enabled}
+
+
 def run_agent(
     prompt: str,
     client: LLMClient | None = None,
@@ -185,11 +193,9 @@ def run_agent(
     configure_logging()
     if (clinic_api is None) != (call_id is None):
         raise ValueError("clinic_api and call_id must be provided together")
-    tools = load_tools(
-        create_clinic_tools(clinic_api, call_id)
-        if clinic_api is not None and call_id is not None
-        else []
-    )
+    tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
+    state: dict[str, Any] = {}
+    tools = _enabled_tools(tools, state)
     response = _completion(prompt, client, tools)
     yield response.immediate_answer
     for call in response.tool_calls:
@@ -198,7 +204,7 @@ def run_agent(
             yield ToolResult(name=call.name, output=f"Unknown tool: {call.name}")
             continue
         try:
-            output = tool["execute"](**call.arguments)
+            output = tool.execute(**call.arguments)
         except (TypeError, ValueError) as exc:
             output = f"Tool error: {exc}"
         yield ToolResult(name=call.name, output=output)
@@ -233,7 +239,9 @@ async def run_agent_turn(
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
     try:
-        tools = load_tools(create_clinic_tools(api, call_id))
+        all_tools = load_tools(create_clinic_tools(api, call_id))
+        state = await repository.workflow_for_call(call_id)
+        tools = _enabled_tools(all_tools, state)
         response = await _observed_tool_completion(
             f"{prompt}\n\nCall memory:\n{memory}", llm_client, tools, event_sink
         )
@@ -249,6 +257,7 @@ async def run_agent_turn(
 
         tool_results = []
         for call in response.tool_calls:
+            tool = _enabled_tools(all_tools, state).get(call.name)
             tool_call_id = uuid4().hex
             started_ns = time.perf_counter_ns()
             await _emit(
@@ -272,7 +281,7 @@ async def run_agent_turn(
                 )
             else:
                 try:
-                    output = await asyncio.to_thread(tool["execute"], **call.arguments)
+                    output = await asyncio.to_thread(tool.execute, **call.arguments)
                 except (TypeError, ValueError) as exc:
                     await _emit_tool_error(
                         event_sink,
@@ -304,6 +313,9 @@ async def run_agent_turn(
                             result_summary=_result_summary(output),
                         ),
                     )
+            if tool and not isinstance(output, str):
+                state = update_state(state, call.name, output)
+                await repository.save_workflow(call_id, state)
             await repository.append_event(
                 call_id,
                 "tool_call",
