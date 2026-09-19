@@ -7,8 +7,8 @@ const GRAPH_KINDS = new Set([
 ]);
 
 const ENDING_LABELS = {
-  waiting: "esperando al llamante",
-  budget: "límite de pasos",
+  waiting: "waiting for caller",
+  budget: "step limit",
   failed: "error",
 };
 
@@ -34,34 +34,34 @@ function Entry({ event, startedAt }) {
 
   if (kind === "stage_entered") {
     return (
-      <Row at={at} tone="text-emerald-400">
-        {payload.from ? `${payload.from} → ${payload.stage}` : `empieza en ${payload.stage}`}
+      <Row at={at} tone="text-emerald-700">
+        {payload.from ? `${payload.from} → ${payload.stage}` : `starts at ${payload.stage}`}
         {payload.cleared?.length > 0 && (
-          <span className="text-slate-600"> · olvida {payload.cleared.join(", ")}</span>
+          <span className="text-slate-400"> · clears {payload.cleared.join(", ")}</span>
         )}
       </Row>
     );
   }
   if (kind === "fact_recorded") {
     return (
-      <Row at={at} tone="text-slate-300">
+      <Row at={at} tone="text-slate-700">
         <span className="font-mono">{payload.key}</span>
-        <span className="text-slate-600"> = </span>
-        <span className="font-mono text-slate-400">{payload.value}</span>
+        <span className="text-slate-400"> = </span>
+        <span className="font-mono text-slate-500">{payload.value}</span>
       </Row>
     );
   }
   if (kind === "tool_rejected" || kind === "transition_rejected") {
     return (
-      <Row at={at} tone="text-amber-400">
+      <Row at={at} tone="text-amber-700">
         <span className="font-mono">{payload.requested}</span>
-        <span className="text-slate-500"> rechazado · {payload.reason}</span>
+        <span className="text-slate-500"> rejected · {payload.reason}</span>
       </Row>
     );
   }
   return (
-    <Row at={at} tone="text-slate-600">
-      turno {payload.turn} termina · {ENDING_LABELS[payload.ending] ?? payload.ending}
+    <Row at={at} tone="text-slate-500">
+      turn {payload.turn} ends · {ENDING_LABELS[payload.ending] ?? payload.ending}
     </Row>
   );
 }
@@ -69,7 +69,7 @@ function Entry({ event, startedAt }) {
 function Row({ at, tone, children }) {
   return (
     <li className="flex gap-3 py-1 text-xs leading-relaxed">
-      <span className="w-12 shrink-0 text-right font-mono text-slate-700">{at}</span>
+      <span className="w-12 shrink-0 text-right font-mono text-slate-400">{at}</span>
       <span className={tone}>{children}</span>
     </li>
   );
@@ -82,24 +82,24 @@ export default function StageTrace({ events, startedAt }) {
   const { facts, stage } = replay(graphEvents);
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
       <div className="mb-3 flex items-baseline gap-2">
-        <h3 className="text-xs uppercase tracking-wide text-slate-500">Recorrido del agente</h3>
+        <h3 className="text-xs font-semibold text-slate-500">Assistant journey</h3>
         {stage && (
-          <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-400">
+          <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">
             {stage}
           </span>
         )}
       </div>
 
       {facts.size > 0 && (
-        <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-b border-slate-800/70 pb-3">
+        <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-b border-slate-200 pb-3">
           {[...facts].map(([key, { value, stage: source }]) => (
             <div key={key} className="contents">
               <dt className="font-mono text-xs text-slate-500">{key}</dt>
-              <dd className="font-mono text-xs text-slate-300">
+              <dd className="font-mono text-xs text-slate-700">
                 {value}
-                {source && <span className="ml-2 text-slate-700">desde {source}</span>}
+                {source && <span className="ml-2 text-slate-400">from {source}</span>}
               </dd>
             </div>
           ))}
