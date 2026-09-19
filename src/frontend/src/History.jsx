@@ -118,15 +118,8 @@ export default function History() {
 
       {stats && (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
             <StatTile label="Calls" value={stats.calls} hint={`${stats.live} active`} />
-            <StatTile
-              label="First response p50"
-              value={stats.ttfa_p50?.toFixed(2) ?? "—"}
-              unit="s"
-              hint="Silence means failure"
-            />
-            <StatTile label="First response p95" value={stats.ttfa_p95?.toFixed(2) ?? "—"} unit="s" />
             <StatTile
               label="Cost"
               value={stats.total_cost_eur?.toFixed(2) ?? "—"}
@@ -262,7 +255,7 @@ export default function History() {
               <tr
                 key={call.call_id}
                 onClick={() => {
-                  window.location.hash = `#/call/${call.call_id}`;
+                  window.location.hash = `#/call/${call.call_id}?from=history`;
                 }}
                 className="cursor-pointer transition-colors hover:bg-emerald-50/50"
               >

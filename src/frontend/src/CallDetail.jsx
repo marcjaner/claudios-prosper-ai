@@ -45,9 +45,13 @@ function Submission({ event }) {
   );
 }
 
-export default function CallDetail({ callId, liveCall, liveEvents }) {
+export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   const [stored, setStored] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [callId]);
 
   // The store holds everything committed so far; the socket carries whatever
   // has happened since. A call opened mid-flight needs both.
@@ -89,8 +93,8 @@ export default function CallDetail({ callId, liveCall, liveEvents }) {
     <main className="clinic-page space-y-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <a href={live ? "#/wall" : "#/historico"} className="rounded text-sm font-medium text-emerald-700 transition-colors hover:text-emerald-900 focus-visible:outline-2 focus-visible:outline-emerald-500">
-            ← {live ? "Back to Wall" : "Back to History"}
+          <a href={returnTo} className="rounded text-sm font-medium text-emerald-700 transition-colors hover:text-emerald-900 focus-visible:outline-2 focus-visible:outline-emerald-500">
+            ← Back
           </a>
           <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="text-3xl font-semibold tracking-[-0.04em] text-slate-950">Conversation detail</h1>
