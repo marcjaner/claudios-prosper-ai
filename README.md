@@ -1,116 +1,46 @@
 # claudios-prosper-ai
 
-## Deepgram STT smoke test
+The existing clinic console backed by the Virtual Agents voice receptionist.
 
-Put the Deepgram key in `.env` at the repository root:
+## Setup
+
+Install Python, agent, and frontend dependencies:
+
+```shell
+uv sync
+npm --prefix virtual-agents install
+npm --prefix src/frontend install
+```
+
+Create `.env` at the repository root. The agent accepts the existing
+`PLATFORM_API_BASE_URL` and `PLATFORM_API_KEY` names as aliases for the agent's
+`PROSPER_*` variables.
 
 ```dotenv
-DEEPGRAM_API_KEY=your-key
+PLATFORM_API_BASE_URL=https://hackspain.getprosperapp.com
+PLATFORM_API_KEY=pk-...
+
+AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_DEPLOYMENT=gpt-realtime-1.5
+
+# Optional: enables the existing live and final Jev conversation scoring.
+TYPESAFE_API_KEY=...
+TYPESAFE_DEFAULT_MODEL=jev-latest
 ```
 
-Then stream a local audio file through Pipecat's Twilio decoder and Deepgram:
+See [`virtual-agents/.env.example`](virtual-agents/.env.example) for optional voice,
+telemetry, recording, and GPT-Live settings.
+
+## Run
 
 ```shell
-uv run python scripts/stt_smoke.py path/to/audio.wav
+./run.sh
 ```
 
-The smoke test requires `ffmpeg` on `PATH`.
+The server exposes the voice endpoint at `ws://localhost:7860/ws`, health at
+`http://localhost:7860/healthz`, and the clinic console at
+`http://localhost:7860/app/`. Set `PORT` to use another port.
 
-## Voice agent
-
-Configure `PLATFORM_API_KEY`, `PLATFORM_API_BASE_URL`, `DEEPGRAM_API_KEY`, the
-selected TTS provider, and either `HELMCODE_API_KEY` or `OPENAI_API_KEY` in
-`.env`, then start the full voice pipeline. OpenAI also requires
-`OPENAI_MODEL`; `OPENAI_REASONING_EFFORT=minimal` enables minimal reasoning.
-`TYPESAFE_API_KEY` is optional and enables historical conversation scoring;
-`TYPESAFE_DEFAULT_MODEL` defaults to `jev-latest`:
-
-```shell
-PYTHONPATH=src uv run python -m agent
-```
-
-Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
-with the Prosper clinic tools, and TTS. The launcher prints the selected port;
-it uses `PORT`, then the first free Conductor workspace port, then the first
-free port starting at `7860`. The call tester is at `/` and the observability
-console at `/app` on that address.
-
-## Twilio transport
-
-`src/twilio/` is the WebSocket server the harness dials. It owns the wire and
-the call's identity, and knows nothing about STT, TTS or the agent.
-
-Plug the rest of the pipeline in with an `AgentFactory` — it receives one
-call's `CallMeta` and returns the processors that sit between transport input
-and output:
-
-```python
-from twilio import CallMeta, create_app
-
-
-async def build_agent(meta: CallMeta):
-    # meta.call_id      goes in every /api/v1/submit/* request
-    # meta.from_number  may be None; a hint, never an identification
-    # meta.connected_at Europe/Madrid; relative dates resolve against it
-    return [stt, agent, tts]
-
-
-app = create_app(build_agent)
-```
-
-Audio crosses that seam as PCM16 mono: 16 kHz in, 24 kHz out. The 8 kHz mu-law
-on the wire is the serializer's problem.
-
-### Testing it without the harness
-
-`scripts/fake_harness.py` plays the caller side of Twilio Media Streams, so the
-transport can be exercised before there is an API key to dial the real one.
-Run the server with the echo agent, which needs no STT or TTS:
-
-```shell
-PYTHONPATH=src uv run python -m twilio
-```
-
-For an interactive local call, open [http://localhost:7860](http://localhost:7860)
-in a browser after starting the server. It uses your microphone and sends the
-same `connected`, `start`, `media`, and `stop` messages that Twilio Media
-Streams sends to `/ws`. Use headphones to prevent the agent's playback from
-feeding back into the microphone.
-
-The page also includes a read-only local database viewer. To see the sample
-storage data, seed it and point the server at that SQLite file:
-
-```shell
-PYTHONPATH=src uv run python scripts/storage_smoke.py
-DATABASE_URL=sqlite+aiosqlite:///data/storage-smoke.db PYTHONPATH=src uv run python -m twilio
-```
-
-```shell
-uv run python scripts/fake_harness.py --out reply.wav
-uv run python scripts/fake_harness.py --withhold-caller-id
-uv run python scripts/fake_harness.py --concurrency 20
-```
-
-Each call reports `first_reply_seconds` — silence is attributed to us and fails
-the case — and `realtime_factor`, which should sit near 1.0.
-
-### Exposing it
-
-```shell
-ngrok http --region eu 7860
-```
-
-Set the endpoint on the dashboard under **Settings → Integration**. It is
-`wss://<host>/ws`: the scheme and the path are both part of it, and the change
-applies to the *next* run.
-
-### What this harness is not
-
-- **No Twilio account.** `TwilioFrameSerializer` defaults to `auto_hang_up=True`
-  and raises without REST credentials. This also rules out Pipecat's
-  `runner.utils.create_transport`, which passes empty ones from the environment.
-- **`clear` is ignored.** Pipecat emits it on every interruption; real Twilio
-  flushes its playback buffer, the harness does not. Barge-in is won by
-  dropping queued audio locally, never by anything sent on the wire.
-- **The call ends when the socket closes.** Nothing tears the pipeline down on
-  its own, hence the `on_client_disconnected` handler.
+For the public challenge endpoint, expose the same port and configure
+`wss://<host>/ws` in Prosper. No authorization header is currently required.

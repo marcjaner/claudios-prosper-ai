@@ -73,6 +73,7 @@ function ToolChip({ event, live }) {
           {payload.name ? getActionLabel(payload.name) : event.kind === "submit" ? "Submitted record" : event.kind === "error" ? "Call issue" : "Assistant activity"}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[11px]">
+          {payload.repairs?.length > 0 && <span className="text-sky-700">arguments repaired</span>}
           {pending && <span className="text-amber-700">{live ? "in progress" : "no result"}</span>}
           {status && <span className={failed ? "text-rose-700" : "text-emerald-700"}>{status}</span>}
           {milliseconds != null && <span className="text-slate-500">{milliseconds} ms</span>}
@@ -83,6 +84,7 @@ function ToolChip({ event, live }) {
           {payload.name ?? payload.route ?? event.kind}
           {payload.url ? `\n${payload.url}` : ""}
           {"\n"}
+          {payload.repairs?.length > 0 ? `Repairs: ${JSON.stringify(payload.repairs)}\n` : ""}
           {JSON.stringify(payload.request ?? payload.arguments ?? {}, null, 2)}
           {"\n"}
           {JSON.stringify(response.response ?? response.result ?? response.error ?? {}, null, 2)}

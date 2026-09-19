@@ -1,0 +1,11 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "uv sync && npm --prefix virtual-agents install && npm --prefix src/frontend install"
+run_mode = "concurrent"
+
+[scripts.run.dev]
+command = "./run.sh"
+available_in = ["local"]
+default = true
+icon = "play"

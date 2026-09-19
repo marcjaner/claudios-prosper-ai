@@ -1,0 +1,46 @@
+{
+  "name": "virtual-agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prosper voice agent powered by Azure or OpenAI Realtime",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "configure": "tsx scripts/configure-local.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "start:azure": "VOICE_PROVIDER=azure VOICE_CONNECTOR=realtime node dist/index.js",
+    "start:openai": "VOICE_PROVIDER=openai VOICE_CONNECTOR=realtime node dist/index.js",
+    "start:realtime": "VOICE_CONNECTOR=realtime node dist/index.js",
+    "start:realtime-1.5": "VOICE_PROVIDER=azure VOICE_CONNECTOR=realtime AZURE_OPENAI_DEPLOYMENT=gpt-realtime-1.5 node dist/index.js",
+    "start:realtime-2": "VOICE_PROVIDER=azure VOICE_CONNECTOR=realtime AZURE_OPENAI_DEPLOYMENT=gpt-realtime-2 node dist/index.js",
+    "start:live": "VOICE_PROVIDER=azure VOICE_CONNECTOR=live node dist/index.js",
+    "tunnel": ".tools/cloudflared tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:7860",
+    "tunnel:ngrok": "tsx scripts/tunnel-ngrok.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "check:connections": "tsx scripts/check-connections.ts",
+    "prosper": "tsx scripts/prosper-runs.ts",
+    "prosper:score": "tsx scripts/prosper-runs.ts score --wait --watch",
+    "check:jev": "tsx scripts/check-jev.ts"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.3",
+    "@azure/monitor-opentelemetry": "^1.20.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-trace-node": "^2.11.0",
+    "ws": "^8.21.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.5",
+    "@types/ws": "^8.18.1",
+    "ai": "^7.0.107",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,4 +1,44 @@
 const ACTION_COPY = {
+  get_clinic: {
+    label: "Consulta del centro",
+    success: "Se han consultado los datos del centro",
+    description: "Se han revisado los datos oficiales del centro.",
+  },
+  find_patient: {
+    label: "Búsqueda del paciente",
+    success: "Se ha verificado al paciente",
+    description: "Se ha consultado y verificado la ficha del paciente.",
+  },
+  resolve_request: {
+    label: "Resolución de la solicitud",
+    success: "Se ha interpretado la solicitud",
+    description: "Se ha resuelto la especialidad, profesional o necesidad indicada.",
+  },
+  list_appointments: {
+    label: "Consulta de citas",
+    success: "Se han consultado las citas del paciente",
+    description: "Se han revisado las citas verificadas del paciente.",
+  },
+  prepare_action: {
+    label: "Preparación de la acción",
+    success: "Se ha preparado la acción para confirmar",
+    description: "La acción se ha preparado sin enviarla todavía.",
+  },
+  confirm_action: {
+    label: "Confirmación de la acción",
+    success: "Se ha enviado la acción confirmada",
+    description: "La acción aprobada por el paciente se ha enviado a Prosper.",
+  },
+  confirm_actions: {
+    label: "Confirmación de acciones",
+    success: "Se han enviado las acciones confirmadas",
+    description: "Las acciones aprobadas por el paciente se han enviado a Prosper.",
+  },
+  report_outcome: {
+    label: "Registro del resultado",
+    success: "Se ha registrado el resultado de la llamada",
+    description: "El rechazo o escalado se ha enviado a Prosper.",
+  },
   search_patients: {
     label: "Búsqueda del paciente",
     success: "Se ha buscado al paciente",
