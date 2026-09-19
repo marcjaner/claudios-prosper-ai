@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +11,9 @@ from fastapi.responses import FileResponse
 from loguru import logger
 from sqlalchemy.engine import make_url
 
-from observability import EventBus, Store, set_bus
+from observability import EventBus, Store, set_bus, subscribe
 from observability.api import register_dashboard
+from scoring import DEFAULT_MODEL, run_scoring_worker
 
 from .transport import AgentFactory, run_call
 
@@ -75,12 +76,27 @@ def create_app(
         app.state.store = store
         set_bus(bus)
         drain = asyncio.create_task(bus.run())
-        try:
-            yield
-        finally:
-            drain.cancel()
-            set_bus(None)
-            store.close()
+        api_key = os.getenv("TYPESAFE_API_KEY", "").strip() or None
+        model = os.getenv("TYPESAFE_DEFAULT_MODEL", "").strip() or DEFAULT_MODEL
+        subscription = subscribe() if api_key else nullcontext(None)
+        with subscription as queue:
+            scorer = (
+                asyncio.create_task(
+                    run_scoring_worker(store, queue, api_key, model)
+                )
+                if queue is not None and api_key is not None
+                else None
+            )
+            try:
+                yield
+            finally:
+                for task in (scorer, drain):
+                    if task is not None:
+                        task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await task
+                set_bus(None)
+                store.close()
 
     app = FastAPI(lifespan=lifespan)
 

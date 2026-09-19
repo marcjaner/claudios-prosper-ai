@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { INSURERS, OUTCOMES, REASONS, UNRECORDED, outcomeStyle } from "./outcomes.js";
+import OutcomeHistogram from "./OutcomeHistogram.jsx";
+import { INSURERS, OUTCOMES, REASONS, outcomeStyle } from "./outcomes.js";
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -29,46 +30,6 @@ function StatTile({ label, value, unit, hint }) {
   );
 }
 
-/** Stacked distribution of the six verbs, with a legend and direct labels. */
-function OutcomeBar({ outcomes, total }) {
-  if (!total) return null;
-  const segments = outcomes.map((row) => ({
-    ...row,
-    style: row.outcome === "sin registrar" ? UNRECORDED : outcomeStyle(row.outcome),
-  }));
-
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-500">
-        Cómo terminaron
-      </p>
-      {/* 2px surface gaps keep adjacent segments separable without a border. */}
-      <div className="mt-3 flex h-3 gap-0.5 overflow-hidden rounded-full">
-        {segments.map(({ outcome, count, style }) => (
-          <div
-            key={outcome}
-            title={`${style.label}: ${count}`}
-            style={{ width: `${(count / total) * 100}%`, backgroundColor: style.color }}
-            className="first:rounded-l-full last:rounded-r-full"
-          />
-        ))}
-      </div>
-      <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
-        {segments.map(({ outcome, count, style }) => (
-          <li key={outcome} className="flex items-center gap-1.5 text-xs">
-            <span
-              style={{ backgroundColor: style.color }}
-              className="h-2 w-2 rounded-full"
-            />
-            <span className="text-slate-400">{style.label}</span>
-            <span className="font-mono tabular-nums text-slate-200">{count}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 function OutcomeCell({ call }) {
   if (!call.outcome) {
     return <span className="text-slate-600">—</span>;
@@ -83,9 +44,24 @@ function OutcomeCell({ call }) {
   );
 }
 
+function ScoringCell({ call }) {
+  if (call.score_overall != null) {
+    return (
+      <span className="inline-block rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs tabular-nums text-slate-200">
+        {Math.round(call.score_overall)}
+      </span>
+    );
+  }
+  if (call.score_error) {
+    return <span className="font-mono text-xs text-rose-400">error</span>;
+  }
+  return <span className="text-slate-600">—</span>;
+}
+
 export default function History() {
   const [calls, setCalls] = useState([]);
   const [stats, setStats] = useState(null);
+  const [histogram, setHistogram] = useState(null);
   const [filters, setFilters] = useState({
     q: "",
     outcome: "",
@@ -119,11 +95,15 @@ export default function History() {
     Promise.all([
       fetch(`/api/calls?${params}`).then((r) => r.json()),
       fetch("/api/stats").then((r) => r.json()),
+      // The histogram reads the same filters, so the picture and the table
+      // can never disagree about what is being looked at.
+      fetch(`/api/histogram?${params}`).then((r) => r.json()),
     ])
-      .then(([callsBody, statsBody]) => {
+      .then(([callsBody, statsBody, histogramBody]) => {
         if (stale) return;
         setCalls(callsBody.calls);
         setStats(statsBody);
+        setHistogram(histogramBody);
       })
       .finally(() => !stale && setLoading(false));
     return () => {
@@ -163,7 +143,7 @@ export default function History() {
               hint={stats.calls ? `${Math.round((stats.failed / stats.calls) * 100)}%` : ""}
             />
           </div>
-          <OutcomeBar outcomes={stats.outcomes} total={stats.calls} />
+          <OutcomeHistogram histogram={histogram} />
         </>
       )}
 
@@ -274,6 +254,7 @@ export default function History() {
               <th className="px-4 py-2 font-medium">Duración</th>
               <th className="px-4 py-2 font-medium">Paciente</th>
               <th className="px-4 py-2 font-medium">Resultado</th>
+              <th className="px-4 py-2 font-medium">Score</th>
               <th className="px-4 py-2 font-medium">Primera voz</th>
               <th className="px-4 py-2 font-medium">Coste</th>
               <th className="px-4 py-2 font-medium">Seguro</th>
@@ -311,6 +292,9 @@ export default function History() {
                   {call.error && (
                     <p className="mt-0.5 truncate text-xs text-rose-400">{call.error}</p>
                   )}
+                </td>
+                <td className="px-4 py-2">
+                  <ScoringCell call={call} />
                 </td>
                 <td className="px-4 py-2 font-mono tabular-nums text-slate-400">
                   {call.ttfa_seconds == null ? "—" : `${call.ttfa_seconds.toFixed(2)}s`}

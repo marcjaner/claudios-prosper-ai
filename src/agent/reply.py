@@ -3,11 +3,14 @@ import logging
 from pipecat.frames.frames import Frame, LLMContextFrame, SystemFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from observability import emit, update_call
 from observability.frames import TTSRequestedFrame
 
 from .agent import run_agent_turn
 
 logger = logging.getLogger(__name__)
+
+AGENT_ERROR_REPLY = "Lo siento, no he podido procesarlo. ¿Puede repetirlo?"
 
 
 class AgentReply(FrameProcessor):
@@ -29,6 +32,7 @@ class AgentReply(FrameProcessor):
                 part.get("text", "") for part in content if isinstance(part, dict)
             )
         logger.info("agent turn received | call_id=%s prompt=%r", self.call_id, content)
+        update_call(self.call_id, state="thinking")
         try:
             async for response in run_agent_turn(
                 content,
@@ -42,16 +46,17 @@ class AgentReply(FrameProcessor):
                     response.immediate_answer,
                     len(response.tool_calls),
                 )
-                await self.push_frame(
-                    TTSRequestedFrame(response.immediate_answer),
-                    FrameDirection.DOWNSTREAM,
-                )
-                await self.push_frame(
-                    TTSSpeakFrame(response.immediate_answer),
-                    FrameDirection.DOWNSTREAM,
-                )
-        except Exception:
+                await self._speak(response.immediate_answer)
+        except Exception as error:
             logger.exception("agent turn failed | call_id=%s", self.call_id)
+            emit(self.call_id, "error", {"message": str(error)})
+            await self._speak(AGENT_ERROR_REPLY)
+
+    async def _speak(self, text: str) -> None:
+        emit(self.call_id, "tts", {"text": text})
+        update_call(self.call_id, state="speaking")
+        await self.push_frame(TTSRequestedFrame(text), FrameDirection.DOWNSTREAM)
+        await self.push_frame(TTSSpeakFrame(text), FrameDirection.DOWNSTREAM)
 
     async def _emit_event(self, frame: SystemFrame) -> None:
         await self.push_frame(frame, FrameDirection.DOWNSTREAM)

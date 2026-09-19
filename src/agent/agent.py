@@ -13,14 +13,13 @@ from uuid import uuid4
 import yaml
 from pipecat.frames.frames import SystemFrame
 
-from agent.clinic_api import ClinicApi
+from agent.clinic_api import ClinicApi, ProsperApiError
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
 from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
 from agent.workflow import available_tools, update_state
-from agent.tools import create_clinic_tools, load_tools
-from agent.utils import configure_logging
+from observability import emit, update_call
 from observability.frames import (
     LLMRequestFailedFrame,
     LLMRequestStartedFrame,
@@ -44,6 +43,14 @@ SENSITIVE_ARGUMENT_MARKERS = {
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
 TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
+SUBMISSIONS = {
+    "register_patient": ("/api/v1/submit/register", "REGISTER"),
+    "book_appointment": ("/api/v1/submit/book", "BOOK"),
+    "reschedule_appointment": ("/api/v1/submit/reschedule", "RESCHEDULE"),
+    "cancel_appointment": ("/api/v1/submit/cancel", "CANCEL"),
+    "submit_no_action": ("/api/v1/submit/no-action", "NO_ACTION"),
+    "escalate_to_human": ("/api/v1/submit/escalate", "ESCALATE"),
+}
 
 
 def retrieve_memory() -> str:
@@ -193,21 +200,171 @@ def run_agent(
     configure_logging()
     if (clinic_api is None) != (call_id is None):
         raise ValueError("clinic_api and call_id must be provided together")
-    tools = load_tools(create_clinic_tools(clinic_api, call_id) if clinic_api else [])
+    tools = load_tools(
+        create_clinic_tools(clinic_api, call_id)
+        if clinic_api is not None and call_id is not None
+        else []
+    )
     state: dict[str, Any] = {}
     tools = _enabled_tools(tools, state)
     response = _completion(prompt, client, tools)
+    _logger.info("Agent produced immediate answer and %d tool call(s)", len(response.tool_calls))
+    _logger.debug("Structured agent response: %s", response.model_dump())
     yield response.immediate_answer
-    for call in response.tool_calls:
+
+    for index, call in enumerate(response.tool_calls):
+        _logger.info("Executing tool=%s", call.name)
+        _logger.debug("Tool arguments for %s: %s", call.name, call.arguments)
+        tool_call_id = f"{call.name}-{index}"
+        if call_id:
+            emit(
+                call_id,
+                "tool_call",
+                {
+                    "name": call.name,
+                    "tool_call_id": tool_call_id,
+                    "arguments": call.arguments,
+                },
+            )
         tool = tools.get(call.name)
         if tool is None:
-            yield ToolResult(name=call.name, output=f"Unknown tool: {call.name}")
+            _logger.warning("Unknown tool requested: %s", call.name)
+            output = f"Unknown tool: {call.name}"
+            if call_id:
+                emit(
+                    call_id,
+                    "tool_result",
+                    {
+                        "name": call.name,
+                        "tool_call_id": tool_call_id,
+                        "status": 404,
+                        "ms": 0,
+                        "error": output,
+                    },
+                )
+            yield ToolResult(name=call.name, output=output)
             continue
+        started = time.monotonic()
         try:
             output = tool.execute(**call.arguments)
+        except ProsperApiError as exc:
+            elapsed_ms = _elapsed_ms(started)
+            _logger.warning("Prosper rejected tool=%s status=%s", call.name, exc.status_code)
+            output = f"Prosper API error {exc.status_code}: {exc.detail}"
+            if call_id:
+                emit(
+                    call_id,
+                    "tool_result",
+                    {
+                        "name": call.name,
+                        "tool_call_id": tool_call_id,
+                        "status": exc.status_code,
+                        "ms": elapsed_ms,
+                        "error": output,
+                    },
+                )
         except (TypeError, ValueError) as exc:
+            elapsed_ms = _elapsed_ms(started)
+            _logger.exception("Tool execution failed: %s", call.name)
             output = f"Tool error: {exc}"
+            if call_id:
+                emit(
+                    call_id,
+                    "tool_result",
+                    {
+                        "name": call.name,
+                        "tool_call_id": tool_call_id,
+                        "status": 500,
+                        "ms": elapsed_ms,
+                        "error": output,
+                    },
+                )
+        else:
+            elapsed_ms = _elapsed_ms(started)
+            _logger.info("Tool completed: %s", call.name)
+            _logger.debug("Tool output for %s: %s", call.name, output)
+            if call_id:
+                emit(
+                    call_id,
+                    "tool_result",
+                    {
+                        "name": call.name,
+                        "tool_call_id": tool_call_id,
+                        "status": 200,
+                        "ms": elapsed_ms,
+                        "response": output,
+                    },
+                )
+                _record_success(call_id, call.name, call.arguments, output)
         yield ToolResult(name=call.name, output=output)
+
+
+def _elapsed_ms(started: float) -> int:
+    return round((time.monotonic() - started) * 1000)
+
+
+def _record_success(call_id: str, name: str, arguments: dict, output: Any) -> None:
+    if name in SUBMISSIONS:
+        route, outcome = SUBMISSIONS[name]
+        emit(
+            call_id,
+            "submit",
+            {"route": route, "status": 200, "request": arguments, "response": output},
+        )
+        update_call(call_id, outcome=outcome, **_call_fields(name, arguments))
+    elif name == "search_patients":
+        _record_unique_patient(call_id, output)
+
+
+def _call_fields(name: str, arguments: dict) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    if name in ("submit_no_action", "escalate_to_human"):
+        reason = arguments.get("reason")
+        fields["reason"] = getattr(reason, "value", reason)
+    if name == "book_appointment":
+        fields["patient_id"] = arguments.get("patient_id")
+    if "policy_id" in arguments:
+        fields["insurer"] = arguments["policy_id"]
+    if name == "register_patient":
+        fields["patient_name"] = " ".join(
+            part
+            for part in (
+                arguments.get("given_name"),
+                arguments.get("first_surname"),
+                arguments.get("second_surname"),
+            )
+            if part
+        )
+        fields["insurer"] = arguments.get("insurer")
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _record_unique_patient(call_id: str, output: Any) -> None:
+    if not isinstance(output, dict):
+        return
+    matches = output.get("matches")
+    if not isinstance(matches, list) or len(matches) != 1 or not isinstance(matches[0], dict):
+        return
+    match = matches[0]
+    fields: dict[str, Any] = {}
+    patient_id = match.get("patient_id") or match.get("id")
+    if patient_id:
+        fields["patient_id"] = patient_id
+    if match.get("insurer"):
+        fields["insurer"] = match["insurer"]
+    patient_name = match.get("name") or " ".join(
+        part
+        for part in (
+            match.get("given_name"),
+            match.get("first_surname"),
+            match.get("second_surname"),
+        )
+        if part
+    )
+    if patient_name:
+        fields["patient_name"] = patient_name
+    if fields:
+        update_call(call_id, **fields)
 
 
 async def run_agent_for_call(
@@ -260,6 +417,15 @@ async def run_agent_turn(
             tool = _enabled_tools(all_tools, state).get(call.name)
             tool_call_id = uuid4().hex
             started_ns = time.perf_counter_ns()
+            emit(
+                call_id,
+                "tool_call",
+                {
+                    "name": call.name,
+                    "tool_call_id": tool_call_id,
+                    "arguments": _safe_arguments(call.arguments),
+                },
+            )
             await _emit(
                 event_sink,
                 ToolCallStartedFrame(
@@ -268,7 +434,8 @@ async def run_agent_turn(
                     arguments=_safe_arguments(call.arguments),
                 ),
             )
-            tool = tools.get(call.name)
+            status = 404 if tool is None else 200
+            succeeded = False
             output: Any = f"Unknown tool: {call.name}"
             if tool is None:
                 await _emit_tool_error(
@@ -281,8 +448,22 @@ async def run_agent_turn(
                 )
             else:
                 try:
-                    output = await asyncio.to_thread(tool.execute, **call.arguments)
+                    output = await asyncio.to_thread(
+                        tool.execute, **call.arguments
+                    )
+                except ProsperApiError as exc:
+                    status = exc.status_code
+                    output = f"Prosper API error {exc.status_code}: {exc.detail}"
+                    await _emit_tool_error(
+                        event_sink,
+                        call.name,
+                        tool_call_id,
+                        started_ns,
+                        type(exc).__name__,
+                        "Tool execution failed",
+                    )
                 except (TypeError, ValueError) as exc:
+                    status = 500
                     await _emit_tool_error(
                         event_sink,
                         call.name,
@@ -293,6 +474,17 @@ async def run_agent_turn(
                     )
                     output = f"Tool error: {exc}"
                 except Exception as exc:
+                    emit(
+                        call_id,
+                        "tool_result",
+                        {
+                            "name": call.name,
+                            "tool_call_id": tool_call_id,
+                            "status": 500,
+                            "ms": _duration_ms(started_ns),
+                            "error": "Tool execution failed",
+                        },
+                    )
                     await _emit_tool_error(
                         event_sink,
                         call.name,
@@ -303,6 +495,7 @@ async def run_agent_turn(
                     )
                     raise
                 else:
+                    succeeded = True
                     await _emit(
                         event_sink,
                         ToolCallFinishedFrame(
@@ -313,7 +506,8 @@ async def run_agent_turn(
                             result_summary=_result_summary(output),
                         ),
                     )
-            if tool and not isinstance(output, str):
+                    _record_success(call_id, call.name, call.arguments, output)
+            if succeeded and not isinstance(output, str):
                 state = update_state(state, call.name, output)
                 await repository.save_workflow(call_id, state)
             await repository.append_event(
@@ -330,13 +524,25 @@ async def run_agent_turn(
                 call.name,
                 output,
             )
-            await repository.record_submission(
+            emit(
                 call_id,
-                call.name.upper(),
-                call.arguments,
-                200,
-                {"output": output},
+                "tool_result",
+                {
+                    "name": call.name,
+                    "tool_call_id": tool_call_id,
+                    "status": status,
+                    "ms": _duration_ms(started_ns),
+                    **({"response": output} if succeeded else {"error": output}),
+                },
             )
+            if succeeded and call.name in SUBMISSIONS:
+                await repository.record_submission(
+                    call_id,
+                    SUBMISSIONS[call.name][1],
+                    call.arguments,
+                    status,
+                    {"output": output},
+                )
             tool_results.append(
                 {"name": call.name, "arguments": call.arguments, "output": output}
             )
