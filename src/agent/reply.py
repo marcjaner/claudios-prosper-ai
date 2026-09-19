@@ -9,7 +9,7 @@ from observability.frames import TTSRequestedFrame
 from .agent import run_agent_turn
 
 logger = logging.getLogger(__name__)
-CALL_LIMIT_SECONDS = 180
+CALL_LIMIT_SECONDS = 600
 
 
 class AgentReply(FrameProcessor):

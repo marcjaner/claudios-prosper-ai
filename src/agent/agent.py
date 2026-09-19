@@ -468,8 +468,8 @@ def _tool_follow_up_prompt(
         f"Call memory:\n{memory}\n\n"
         f"Tool execution history:\n{json.dumps(tool_history, ensure_ascii=False)}\n\n"
         "Continue from the tool results. A result with ok=false is an error, not a "
-        "successful action: follow its instruction and retry with corrected arguments. "
-        "Never repeat an identical failed call or repeat an action that already succeeded. "
+        "successful action: follow its instruction. Never repeat an action that already "
+        "succeeded. "
         "If you have enough successful data, answer the caller concisely without mentioning "
         "internal tools. If correction needs caller information, ask one question."
     )

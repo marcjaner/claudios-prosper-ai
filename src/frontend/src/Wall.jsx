@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 
-// Every call is cut off at three minutes, so duration is a countdown.
-const CALL_LIMIT_SECONDS = 180;
-const WARN_SECONDS = 150;
-const CRITICAL_SECONDS = 170;
+// Every call is cut off at ten minutes, so duration is a countdown.
+const CALL_LIMIT_SECONDS = 600;
+const WARN_SECONDS = 570;
+const CRITICAL_SECONDS = 590;
 // An ended call stays on the wall briefly so you can read how it finished.
 const LINGER_SECONDS = 10;
 

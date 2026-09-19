@@ -34,7 +34,7 @@ RECORDINGS_DIR = ROOT / os.getenv("CALL_RECORDINGS_DIR", "outputs/recordings")
 SAFE_CALL_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 AUDIO_FILES = frozenset({"caller.wav", "agent.wav", "mixed.wav", "stereo.wav"})
 CLINIC_TIMEZONE = ZoneInfo("Europe/Madrid")
-CALL_LIMIT_SECONDS = 180
+CALL_LIMIT_SECONDS = 600
 
 app = FastAPI(title="Call Explorer", docs_url=None, redoc_url=None)
 
@@ -392,7 +392,7 @@ PAGE = r"""<!doctype html>
     .latency-phase { position:absolute; top:2px; z-index:1; height:11px; min-width:2px; border-radius:2px; background:var(--phase); opacity:.82; }
     .latency-phase:hover { opacity:1; box-shadow:0 0 9px color-mix(in srgb,var(--phase) 55%,transparent); }
     .deadline { position:absolute; z-index:2; top:-3px; bottom:-3px; width:1px; background:var(--red); box-shadow:0 0 7px var(--red); }
-    .deadline::before { content:'180s'; position:absolute; right:4px; top:-14px; color:var(--red); font-size:8px; }
+    .deadline::before { content:'600s'; position:absolute; right:4px; top:-14px; color:var(--red); font-size:8px; }
     .latency-axis { margin-top:3px; }
     .axis-track { position:relative; height:15px; color:#59645f; font-size:8px; }
     .axis-tick { position:absolute; transform:translateX(-50%); }
@@ -545,7 +545,7 @@ PAGE = r"""<!doctype html>
 
     function renderLatency(latency) {
       if (!latency?.phases?.length) return '<div class="empty">No timing trace for this call.</div>';
-      const scale = latency.scale || 180;
+      const scale = latency.scale || 600;
       const deadline = Math.min(100, (latency.limit / scale) * 100);
       const totals = latencyRows.filter(([key]) => latency.totals[key] != null).map(([key,label]) => `
         <span class="latency-total phase-${key}"><span class="swatch"></span>${label}<strong>${latency.totals[key].toFixed(1)}s</strong></span>`).join('');
@@ -557,7 +557,7 @@ PAGE = r"""<!doctype html>
         }).join('');
         return `<div class="latency-row"><span class="latency-label">${label}</span><div class="latency-track">${phases}<span class="deadline" style="left:${deadline}%"></span></div></div>`;
       }).join('');
-      const ticks = [...new Set([0,60,120,180,scale])].filter((value) => value <= scale).map((value) => `<span class="axis-tick" style="left:${(value/scale)*100}%">${value}s</span>`).join('');
+      const ticks = [...new Set([0,120,240,360,480,600,scale])].filter((value) => value <= scale).map((value) => `<span class="axis-tick" style="left:${(value/scale)*100}%">${value}s</span>`).join('');
       return `<div class="latency-panel"><div class="latency-totals">${totals}</div>${rows}<div class="latency-axis"><span></span><div class="axis-track">${ticks}</div></div><div class="count">Cumulative lane totals; overlapping phases are shown on separate lanes.</div></div>`;
     }
 
