@@ -1,12 +1,16 @@
 import asyncio
 import os
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from loguru import logger
+from observability import EventBus, Store, set_bus
+from observability.api import register_dashboard
 from sqlalchemy.engine import make_url
 
 from .transport import AgentFactory, run_call
@@ -16,6 +20,9 @@ CALL_TESTER_PATH = "/"
 CALL_TESTER_FILE = Path(__file__).resolve().parents[1] / "frontend" / "call_tester.html"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///data/agent.db"
 DATABASE_SAMPLE_ROWS = 25
+# Overridable so a seeded fixture never lands in the weekend's real history.
+CONSOLE_DB_PATH = Path(os.getenv("CALLS_DB", "calls.db"))
+VITE_DEV_SERVER = "http://localhost:5173"
 
 
 def read_database_snapshot() -> dict[str, Any]:
@@ -42,17 +49,47 @@ def read_database_snapshot() -> dict[str, Any]:
         tables = []
         for name in table_names:
             quoted_name = name.replace('"', '""')
-            cursor = connection.execute(f'SELECT * FROM "{quoted_name}" LIMIT ?', (DATABASE_SAMPLE_ROWS,))
+            cursor = connection.execute(
+                f'SELECT * FROM "{quoted_name}" LIMIT ?', (DATABASE_SAMPLE_ROWS,)
+            )
             columns = [column[0] for column in cursor.description]
             rows = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
-            count = connection.execute(f'SELECT COUNT(*) FROM "{quoted_name}"').fetchone()[0]
-            tables.append({"name": name, "count": count, "columns": columns, "rows": rows})
+            count = connection.execute(
+                f'SELECT COUNT(*) FROM "{quoted_name}"'
+            ).fetchone()[0]
+            tables.append(
+                {"name": name, "count": count, "columns": columns, "rows": rows}
+            )
 
     return {"path": str(database_path), "tables": tables}
 
 
 def create_app(build_agent: AgentFactory) -> FastAPI:
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        store = Store(CONSOLE_DB_PATH)
+        bus = EventBus(store)
+        app.state.store = store
+        set_bus(bus)
+        drain = asyncio.create_task(bus.run())
+        try:
+            yield
+        finally:
+            drain.cancel()
+            set_bus(None)
+            store.close()
+
+    app = FastAPI(lifespan=lifespan)
+
+    # For the Vite dev server only. This has nothing to do with
+    # FastAPIWebsocketParams(allowed_origins=[]), which guards the Twilio
+    # socket, and browsers do not enforce CORS on WebSockets at all.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[VITE_DEV_SERVER],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get(CALL_TESTER_PATH, include_in_schema=False)
     async def call_tester() -> FileResponse:
@@ -78,4 +115,6 @@ def create_app(build_agent: AgentFactory) -> FastAPI:
         except Exception:  # noqa: BLE001 - never let one call escape into the server
             logger.exception("unhandled error serving call")
 
+    # The call tester owns /, so the console is mounted under /app.
+    register_dashboard(app)
     return app

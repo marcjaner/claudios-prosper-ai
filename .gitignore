@@ -226,3 +226,15 @@ outputs/
 
 # Coding
 .zcode/
+
+# Call observability
+*.db
+*.db-shm
+*.db-wal
+recordings/
+# Where main's debug bundles and the agent's SQLite land by default.
+data/
+
+# Dashboard
+src/frontend/node_modules/
+src/frontend/dist/
