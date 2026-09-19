@@ -72,6 +72,7 @@ export function useLiveCalls() {
         const data = JSON.parse(message.data);
         if (data.type === "snapshot") {
           setCalls(new Map(data.calls.map((call) => [call.call_id, call])));
+          setEvents(new Map(Object.entries(data.events ?? {})));
         } else if (data.type === "call" || data.type === "event") {
           schedule(data);
         }

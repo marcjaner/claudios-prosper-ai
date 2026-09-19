@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 
-import Builder from "./Builder.jsx";
 import CallDetail from "./CallDetail.jsx";
 import History from "./History.jsx";
 import Sparkline from "./Sparkline.jsx";
@@ -10,7 +9,6 @@ import { useLiveCalls } from "./useLiveCalls.js";
 const VIEWS = {
   "#/wall": { label: "Wall", component: Wall },
   "#/historico": { label: "Histórico", component: History },
-  "#/builder": { label: "Agente", component: Builder },
 };
 const DEFAULT_VIEW = "#/wall";
 
@@ -50,7 +48,7 @@ export default function App() {
   const openCall = route.match(CALL_ROUTE)?.[1];
   const view = VIEWS[route] ? route : DEFAULT_VIEW;
   const View = VIEWS[view].component;
-  const clinicTheme = Boolean(openCall) || view !== "#/builder";
+  const clinicTheme = Boolean(openCall) || view === "#/wall" || view === "#/historico";
   const activeView = openCall ? "#/historico" : view;
 
   return (
@@ -99,7 +97,7 @@ export default function App() {
               }
             >
               {clinicTheme
-                ? { "#/wall": "Wall", "#/historico": "History", "#/builder": "Agent" }[hash]
+                ? { "#/wall": "Wall", "#/historico": "History" }[hash]
                 : label}
             </a>
           ))}
@@ -133,7 +131,7 @@ export default function App() {
           liveEvents={events.get(openCall) ?? []}
         />
       ) : (
-        <View calls={calls} />
+        <View calls={calls} events={events} />
       )}
     </div>
   );
