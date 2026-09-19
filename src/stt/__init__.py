@@ -1,11 +1,13 @@
 from .deepgram import (
-    DeepgramEndpointingProcessor,
     DeepgramEndpointingStopStrategy,
+    DeepgramEOTCoordinator,
+    DeepgramEOTEventFrame,
     create_deepgram_stt,
 )
 
 __all__ = [
-    "DeepgramEndpointingProcessor",
+    "DeepgramEOTCoordinator",
+    "DeepgramEOTEventFrame",
     "DeepgramEndpointingStopStrategy",
     "create_deepgram_stt",
 ]

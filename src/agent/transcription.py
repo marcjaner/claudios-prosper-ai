@@ -7,11 +7,12 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from stt import (
-    DeepgramEndpointingProcessor,
     DeepgramEndpointingStopStrategy,
+    DeepgramEOTCoordinator,
     create_deepgram_stt,
 )
 from tts import create_tts
@@ -28,7 +29,6 @@ async def log_completed_turn(meta: CallMeta, content: str) -> None:
 
 def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
     params = LLMUserAggregatorParams(
-        vad_analyzer=SileroVADAnalyzer(),
         user_turn_stop_timeout=30,
         user_turn_strategies=UserTurnStrategies(
             stop=[DeepgramEndpointingStopStrategy()]
@@ -52,8 +52,9 @@ def create_transcription_agent(
 ) -> AgentFactory:
     async def build_agent(meta: CallMeta):
         processors = [
+            VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
-            DeepgramEndpointingProcessor(),
+            DeepgramEOTCoordinator(),
             create_user_aggregator(meta, on_completed_turn),
         ]
         if reply:

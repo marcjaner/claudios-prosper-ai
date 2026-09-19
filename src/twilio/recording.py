@@ -32,6 +32,8 @@ from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.frame_processor import FrameDirection
 
+from stt import DeepgramEOTEventFrame
+
 from .handshake import CallMeta
 
 RECORDINGS_DIR_VAR = "CALL_RECORDINGS_DIR"
@@ -115,6 +117,16 @@ class CallTimelineObserver(BaseObserver):
                 "text": frame.text,
                 "final": True,
                 "provider_finalized": frame.finalized,
+            }
+        if isinstance(frame, DeepgramEOTEventFrame):
+            return {
+                "event": "eot_decision",
+                "transcript": frame.transcript,
+                "deepgram_event": frame.deepgram_event,
+                "vad_state": frame.vad_state,
+                "smart_turn_probability": frame.smart_turn_probability,
+                "decision": frame.decision,
+                "cancellation_reason": frame.cancellation_reason,
             }
         if isinstance(frame, VADUserStartedSpeakingFrame):
             return {
