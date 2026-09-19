@@ -188,6 +188,36 @@ def test_record_facts_rejects_a_nested_payload():
     assert state.refuse_reason("record_facts", {"facts": {"a": "b"}}) == ""
 
 
+def test_every_model_call_records_its_time_and_prompt_size(monkeypatch):
+    """Tool latency was already visible; without this the model's never was."""
+    import agent.agent as module
+
+    recorded = []
+    monkeypatch.setattr(
+        module, "emit", lambda call_id, kind, payload=None: recorded.append((kind, payload))
+    )
+
+    state = two_stage_state()
+    client = FakeClient(
+        says("One moment.", ("search_patients", {"name": "Ana"})),
+        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+    )
+
+    run_turn("I'm Ana", state, client, FakeRepository(),
+             {"search_patients": {"matches": [{"patient_id": "P1"}]}})
+
+    model_calls = [payload for kind, payload in recorded if kind == module.LLM_EVENT]
+    # Two tool steps plus the reserved closing answer.
+    assert [call["purpose"] for call in model_calls] == ["tools", "tools", "answer"]
+    assert all(call["ms"] >= 0 and call["prompt_chars"] > 0 for call in model_calls)
+    # The prompt only ever grows within a turn, which is the thing worth seeing.
+    sizes = [call["prompt_chars"] for call in model_calls]
+    assert sizes == sorted(sizes)
+
+    turn = next(payload for kind, payload in recorded if kind == "turn_finished")
+    assert turn["ms"] >= 0
+
+
 def test_the_running_graph_supplies_the_system_prompt():
     """The prompt is configuration the builder saves, not a file sitting beside the code."""
     state = two_stage_state()

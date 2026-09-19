@@ -39,6 +39,7 @@ const RENDERED = new Set([
   "submit",
   "error",
   "guardrail_breach",
+  "llm_call",
 ]);
 
 function GuardrailBreach({ event }) {
@@ -48,6 +49,25 @@ function GuardrailBreach({ event }) {
 function offset(event, startedAt) {
   const seconds = Math.max(0, event.ts - startedAt);
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+}
+
+// Model time was the one number the console never showed, so it is rendered
+// plainly rather than folded into the tool chips: a slow turn is almost always
+// the model waiting, not the clinic.
+function ModelChip({ event }) {
+  const { payload } = event;
+  const slow = payload.ms >= 4000;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 font-mono text-[11px] text-slate-400">
+      <span className={slow ? "font-semibold text-amber-700" : "text-slate-500"}>
+        model {(payload.ms / 1000).toFixed(1)}s
+      </span>
+      <span>· prompt {Math.round(payload.prompt_chars / 1000)}k chars</span>
+      {payload.total_tokens != null && <span>· {payload.total_tokens} tok</span>}
+      {payload.purpose === "answer" && <span>· closing answer</span>}
+      {payload.error && <span className="text-rose-700">· {payload.error}</span>}
+    </div>
+  );
 }
 
 function ToolChip({ event, live }) {
@@ -145,6 +165,8 @@ export default function Transcript({ events: incoming, startedAt, live }) {
                     {event.payload.text}
                   </p>
                 </div>
+              ) : event.kind === "llm_call" ? (
+                <ModelChip event={event} />
               ) : (
                 <ToolChip event={event} live={live} />
               )}

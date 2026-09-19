@@ -71,6 +71,45 @@ SUBMISSIONS = {
 }
 
 
+# The pipeline frames carry model timing too, but they die with the pipeline.
+# This is the same number written where a call can be read back afterwards:
+# tool latency was already visible and the model's was not, which hid where a
+# three-minute budget actually goes.
+LLM_EVENT = "llm_call"
+
+
+def _emit_llm_event(
+    call_id: str,
+    purpose: str,
+    state: CallGraph | None,
+    started_ns: int,
+    prompt: str,
+    model: str,
+    usage: Any = None,
+    error: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "purpose": purpose,
+        "model": model,
+        "ms": round(_duration_ms(started_ns)),
+        # Characters, not tokens: it is the growth that matters, and every
+        # provider counts tokens differently.
+        "prompt_chars": len(prompt),
+        "turn": state.turn if state else 0,
+        "stage": state.stage_id if state else None,
+    }
+    if usage is not None:
+        payload.update(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            cached_tokens=usage.cached_tokens,
+        )
+    if error:
+        payload["error"] = error
+    emit(call_id, LLM_EVENT, payload)
+
+
 def retrieve_memory() -> str:
     return ""
 
@@ -110,6 +149,8 @@ async def _observed_tool_completion(
     client: LLMClient,
     tool_definitions: list[dict[str, Any]],
     event_sink: EventSink | None,
+    call_id: str = "",
+    state: CallGraph | None = None,
 ) -> ToolCompletion:
     request_id = uuid4().hex
     model = client.default_model
@@ -130,9 +171,16 @@ async def _observed_tool_completion(
                 error_message="LLM request failed",
             ),
         )
+        if call_id:
+            _emit_llm_event(
+                call_id, "tools", state, started_ns, prompt, model,
+                error=type(exc).__name__,
+            )
         raise
 
     usage = completion.usage
+    if call_id:
+        _emit_llm_event(call_id, "tools", state, started_ns, prompt, model, usage)
     await _emit(
         event_sink,
         LLMResponseFinishedFrame(
@@ -153,6 +201,8 @@ async def _observed_completion(
     prompt: str,
     client: LLMClient,
     event_sink: EventSink | None,
+    call_id: str = "",
+    state: CallGraph | None = None,
 ) -> AgentResponse:
     request_id = uuid4().hex
     model = client.default_model
@@ -173,9 +223,16 @@ async def _observed_completion(
                 error_message="LLM request failed",
             ),
         )
+        if call_id:
+            _emit_llm_event(
+                call_id, "answer", state, started_ns, prompt, model,
+                error=type(exc).__name__,
+            )
         raise
 
     usage = completion.usage
+    if call_id:
+        _emit_llm_event(call_id, "answer", state, started_ns, prompt, model, usage)
     await _emit(
         event_sink,
         LLMResponseFinishedFrame(
@@ -403,6 +460,7 @@ async def run_agent_turn(
     turn_started_at = time.monotonic()
     spoke_this_step = False
     ending = "waiting"
+    turn_started_ns = time.perf_counter_ns()
     try:
         tools = load_tools(create_clinic_tools(api, call_id))
         for step in range(1, MAX_ACTION_STEPS + 1):
@@ -418,6 +476,8 @@ async def run_agent_turn(
                 llm_client,
                 _offered_tools(state, tools),
                 event_sink,
+                call_id,
+                state,
             )
             batch = _plan_batch(completion, state, call_id, step)
             api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
@@ -469,6 +529,7 @@ async def run_agent_turn(
                 seconds_remaining=_remaining_seconds(
                     seconds_remaining, turn_started_at
                 ),
+                call_id=call_id,
             )
             state.history.append(HistoryEntry(speaker="agent", text=answer))
             await repository.append_event(call_id, "agent_follow_up", {"text": answer})
@@ -477,7 +538,11 @@ async def run_agent_turn(
         ending = "failed"
         raise
     finally:
-        emit(call_id, "turn_finished", {"turn": state.turn, "stage": state.stage_id, "ending": ending})
+        emit(call_id, "turn_finished", {
+            "turn": state.turn, "stage": state.stage_id, "ending": ending,
+            # The caller hears this number as the pause before the agent answers.
+            "ms": round(_duration_ms(turn_started_ns)),
+        })
         await asyncio.to_thread(api.close)
 
 def _send_immediate_responses() -> bool:
@@ -773,6 +838,7 @@ async def _final_answer(
     event_sink: EventSink | None,
     language: Language = DEFAULT_LANGUAGE,
     seconds_remaining: int | None = None,
+    call_id: str = "",
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
     response = await _observed_completion(
@@ -781,6 +847,8 @@ async def _final_answer(
         "internal tools or stages, and do not promise anything you have not already done.",
         client,
         event_sink,
+        call_id,
+        state,
     )
     # A structurally valid but blank answer would still leave the caller in silence.
     return response.immediate_answer.strip() or phrases(language).no_answer
