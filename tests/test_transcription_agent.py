@@ -11,12 +11,14 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frame_processor import FrameDirection
 
 import observability
+from agent import transcription
 from agent.transcription import (
     EMPTY_TURN_RECOVERY_MESSAGE,
     TranscriptObserver,
     create_user_aggregator,
 )
 from observability.frames import TTSRequestedFrame
+from storage import Database
 from twilio import CallMeta
 
 
@@ -143,3 +145,55 @@ def test_transcript_observer_emits_partial_and_forwards_the_frame(bus):
     assert forwarded == [frame]
     assert bus.events == [("CA456", "stt_partial", {"text": "Quería ci"})]
     assert bus.updates == [("CA456", {"state": "listening"})]
+
+
+def test_concurrent_calls_initialize_the_shared_database_once(monkeypatch):
+    class FakeDatabase:
+        def __init__(self):
+            self.init_calls = 0
+
+        async def init(self):
+            self.init_calls += 1
+            await asyncio.sleep(0.01)
+
+    class FakeRepository:
+        def __init__(self, _database):
+            self.call_ids = []
+
+        async def create_call(self, call_id, *_args):
+            self.call_ids.append(call_id)
+
+    database = FakeDatabase()
+    monkeypatch.setattr(transcription, "CallRepository", FakeRepository)
+    monkeypatch.setattr(transcription, "VADProcessor", lambda **_kwargs: object())
+    monkeypatch.setattr(transcription, "SileroVADAnalyzer", lambda: object())
+    monkeypatch.setattr(transcription, "create_deepgram_stt", lambda: object())
+    monkeypatch.setattr(transcription, "DeepgramEOTCoordinator", lambda: object())
+    monkeypatch.setattr(transcription, "TranscriptObserver", lambda _meta: object())
+    monkeypatch.setattr(
+        transcription, "create_user_aggregator", lambda *_args: object()
+    )
+    monkeypatch.setattr(transcription, "AgentReply", lambda *_args: object())
+    monkeypatch.setattr(transcription, "create_tts", lambda: object())
+    build_agent = transcription.create_transcription_agent(
+        database=cast(Database, database)
+    )
+
+    async def run():
+        await asyncio.gather(
+            *(
+                build_agent(
+                    CallMeta(
+                        call_id=f"CA{index}",
+                        stream_sid=f"MZ{index}",
+                        from_number=None,
+                        connected_at=make_meta().connected_at,
+                    )
+                )
+                for index in range(20)
+            )
+        )
+
+    asyncio.run(run())
+
+    assert database.init_calls == 1

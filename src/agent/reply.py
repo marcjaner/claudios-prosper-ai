@@ -8,22 +8,28 @@ from observability import emit, update_call
 from observability.frames import TTSRequestedFrame
 
 from .agent import run_agent_turn
+from .language import CallLanguage, phrases
 from .stage_runtime import CallGraph
 
 logger = logging.getLogger(__name__)
 CALL_LIMIT_SECONDS = 600
 
-AGENT_ERROR_REPLY = "Lo siento, no he podido procesarlo. ¿Puede repetirlo?"
-
 
 class AgentReply(FrameProcessor):
-    def __init__(self, call_id, repository, state: CallGraph | None = None):
+    def __init__(
+        self,
+        call_id,
+        repository,
+        state: CallGraph | None = None,
+        language: CallLanguage | None = None,
+    ):
         super().__init__()
         self.call_id = call_id
         self.repository = repository
         self.started_at = time.monotonic()
         # Frozen for the call: saving in the builder must not move live ground.
         self.state = state or CallGraph.start()
+        self.language = language or CallLanguage()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -39,6 +45,9 @@ class AgentReply(FrameProcessor):
             )
         logger.info("agent turn received | call_id=%s prompt=%r", self.call_id, content)
         update_call(self.call_id, state="thinking")
+        # Read once: the turn answers in the language the caller was speaking
+        # when it started, even if they interrupt it in another.
+        language = self.language.language
         try:
             async for response in run_agent_turn(
                 content,
@@ -49,6 +58,7 @@ class AgentReply(FrameProcessor):
                 seconds_remaining=max(
                     0, CALL_LIMIT_SECONDS - (time.monotonic() - self.started_at)
                 ),
+                language=language,
             ):
                 logger.info(
                     "agent response ready | call_id=%s answer=%r tool_calls=%s",
@@ -60,7 +70,7 @@ class AgentReply(FrameProcessor):
         except Exception as error:
             logger.exception("agent turn failed | call_id=%s", self.call_id)
             emit(self.call_id, "error", {"message": str(error)})
-            await self._speak(AGENT_ERROR_REPLY)
+            await self._speak(phrases(language).error)
 
     async def _speak(self, text: str) -> None:
         emit(self.call_id, "tts", {"text": text})

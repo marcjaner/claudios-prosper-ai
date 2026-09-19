@@ -17,8 +17,10 @@ from zoneinfo import ZoneInfo
 
 import yaml
 from pipecat.frames.frames import SystemFrame
+from pipecat.transcriptions.language import Language
 
 from agent.clinic_api import ClinicApi, ProsperApiError
+from agent.language import DEFAULT_LANGUAGE, phrases, reply_instruction
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
 from agent.stage_runtime import (
@@ -56,8 +58,6 @@ SENSITIVE_ARGUMENT_MARKERS = {
     "token",
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
-TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
-NO_ANSWER_FALLBACK = "Perdone, ¿puede repetirme lo que necesita?"
 CLINIC_TIMEZONE = ZoneInfo("Europe/Madrid")
 SUBMISSIONS = {
     "register_patient": ("/api/v1/submit/register", "REGISTER"),
@@ -102,7 +102,7 @@ def _agent_response(completion: ToolCompletion) -> AgentResponse:
     ]
     answer = completion.text.strip()
     if tool_calls and not answer:
-        answer = TOOL_ACKNOWLEDGEMENT
+        answer = phrases(DEFAULT_LANGUAGE).acknowledgement
     if not answer:
         raise ValueError("LLM returned neither text nor tool calls.")
     return AgentResponse(immediate_answer=answer, tool_calls=tool_calls)
@@ -388,6 +388,7 @@ async def run_agent_turn(
     event_sink: EventSink | None = None,
     state: CallGraph | None = None,
     seconds_remaining: float | None = None,
+    language: Language = DEFAULT_LANGUAGE,
 ):
     """Run one caller turn as a bounded loop over the call's stage graph."""
     configure_logging()
@@ -408,14 +409,17 @@ async def run_agent_turn(
             completion = await _observed_tool_completion(
                 _graph_prompt(
                     state,
-                    _remaining_seconds(seconds_remaining, turn_started_at),
+                    language=language,
+                    seconds_remaining=_remaining_seconds(
+                        seconds_remaining, turn_started_at
+                    ),
                 ),
                 llm_client,
                 _offered_tools(state, tools),
                 event_sink,
             )
             batch = _plan_batch(completion, state, call_id, step)
-            speech = _speech_for(completion, batch.refused)
+            speech = _speech_for(completion, batch.refused, language)
             should_speak = bool(speech) and (
                 not completion.tool_calls or _send_immediate_responses()
             )
@@ -444,7 +448,10 @@ async def run_agent_turn(
                 state,
                 llm_client,
                 event_sink,
-                _remaining_seconds(seconds_remaining, turn_started_at),
+                language=language,
+                seconds_remaining=_remaining_seconds(
+                    seconds_remaining, turn_started_at
+                ),
             )
             state.history.append(HistoryEntry(speaker="agent", text=answer))
             await repository.append_event(call_id, "agent_follow_up", {"text": answer})
@@ -455,7 +462,6 @@ async def run_agent_turn(
     finally:
         emit(call_id, "turn_finished", {"turn": state.turn, "stage": state.stage_id, "ending": ending})
         await asyncio.to_thread(api.close)
-
 
 def _send_immediate_responses() -> bool:
     return os.getenv("SEND_IMMEDIATE_RESPONSES", "true").strip().lower() in {
@@ -496,10 +502,14 @@ def _with_call_budget(prompt: str, seconds_remaining: int | None) -> str:
     )
 
 
-def _graph_prompt(state: CallGraph, seconds_remaining: int | None = None) -> str:
+def _graph_prompt(
+    state: CallGraph,
+    language: Language = DEFAULT_LANGUAGE,
+    seconds_remaining: int | None = None,
+) -> str:
     current_date = datetime.now(CLINIC_TIMEZONE).date().isoformat()
     return _with_call_budget(
-        f"System prompt:\n{_system_prompt()}\n\n"
+        f"System prompt:\n{_system_prompt()}\n{reply_instruction(language)}\n\n"
         f"Current date in Europe/Madrid: {current_date}\n\n"
         f"{render_context(state)}",
         seconds_remaining,
@@ -516,7 +526,9 @@ def _offered_tools(state: CallGraph, tools: dict[str, Tool]) -> list[dict[str, A
     return offered
 
 
-def _speech_for(completion: ToolCompletion, refused: bool) -> str:
+def _speech_for(
+    completion: ToolCompletion, refused: bool, language: Language = DEFAULT_LANGUAGE
+) -> str:
     """A draft utterance is only safe once every operation in it was permitted."""
     if refused:
         return ""
@@ -528,7 +540,7 @@ def _speech_for(completion: ToolCompletion, refused: bool) -> str:
         if call.name not in (RECORD_FACTS_TOOL, GO_TO_TOOL)
     ]
     # Bookkeeping-only steps stay silent; a caller should never hear the graph working.
-    return TOOL_ACKNOWLEDGEMENT if business else ""
+    return phrases(language).acknowledgement if business else ""
 
 
 @dataclass
@@ -723,18 +735,19 @@ async def _final_answer(
     state: CallGraph,
     client: LLMClient,
     event_sink: EventSink | None,
+    language: Language = DEFAULT_LANGUAGE,
     seconds_remaining: int | None = None,
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
     response = await _observed_completion(
-        f"{_graph_prompt(state, seconds_remaining)}\n\n"
+        f"{_graph_prompt(state, language, seconds_remaining)}\n\n"
         "Answer the caller now using only what is above. Be concise, never mention "
         "internal tools or stages, and do not promise anything you have not already done.",
         client,
         event_sink,
     )
     # A structurally valid but blank answer would still leave the caller in silence.
-    return response.immediate_answer.strip() or NO_ANSWER_FALLBACK
+    return response.immediate_answer.strip() or phrases(language).no_answer
 
 
 def _tool_error_output(error: Exception, *, can_retry: bool) -> dict[str, Any]:

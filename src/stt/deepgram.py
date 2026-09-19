@@ -35,6 +35,33 @@ DEEPGRAM_EOT_GRACE_SECONDS = 0.7
 SMART_TURN_INCOMPLETE_TIMEOUT_SECONDS = 5
 SMART_TURN_COMPLETE_THRESHOLD = 0.5
 SMART_TURN_AUDIO_SECONDS = 8
+DEEPGRAM_KEYTERMS = [
+    "Clínica Arenal",
+    "Carmen Ortiz Vidal",
+    "Pablo Requena",
+    "Martín Sáez",
+    "Marta Sáenz",
+    "Elena Iglesias",
+    "Emilio Iglesia",
+    "Laura Benítez Roca",
+    "Javier Ocaña",
+    "Álvaro Cid",
+    "Nuria Peral",
+    "Isabel Montoro",
+    "Tomás Vilar",
+    "Arenal Centro",
+    "Arenal Norte",
+    "Arenal Sur",
+    "Sanitas",
+    "Adeslas",
+    "DKV",
+    "ASISA",
+    "Mapfre Salud",
+    "Caser Salud",
+    "Cigna",
+    "AXA",
+    "Nueva Mutua Sanitaria",
+]
 
 
 @dataclass
@@ -318,6 +345,7 @@ def create_deepgram_stt(api_key: str | None = None) -> DeepgramSTTService:
         language="multi",
         endpointing=DEEPGRAM_ENDPOINTING_MS,
         interim_results=True,
+        keyterm=DEEPGRAM_KEYTERMS,
         numerals=True,
         punctuate=True,
         smart_format=True,

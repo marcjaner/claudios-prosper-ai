@@ -28,9 +28,10 @@ PYTHONPATH=src uv run python -m agent
 ```
 
 Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
-with the Prosper clinic tools, and TTS. Once the server is up, the call
-tester is at [http://localhost:7860](http://localhost:7860) and the
-observability console at [http://localhost:7860/app](http://localhost:7860/app).
+with the Prosper clinic tools, and TTS. The launcher prints the selected port;
+it uses `PORT`, then the first free Conductor workspace port, then the first
+free port starting at `7860`. The call tester is at `/` and the observability
+console at `/app` on that address.
 
 ## Twilio transport
 

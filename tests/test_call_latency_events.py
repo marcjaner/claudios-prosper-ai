@@ -9,6 +9,7 @@ from pipecat.processors.frame_processor import FrameDirection
 import agent.reply as reply_module
 from agent.agent import run_agent_turn
 from agent.clinic_api import ClinicApi
+from agent.language import DEFAULT_LANGUAGE, phrases
 from agent.llm import (
     LLMClient,
     LLMToolCall,
@@ -203,7 +204,7 @@ def test_tool_turn_observes_initial_and_follow_up_llm_requests(monkeypatch):
     assert frames[4].request_id == frames[5].request_id
     assert frames[0].request_id != frames[4].request_id
     assert [response.immediate_answer for response in replies] == [
-        "Let me check that for you.",
+        phrases(DEFAULT_LANGUAGE).acknowledgement,
         "I found your record.",
     ]
 

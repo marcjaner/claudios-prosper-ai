@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Sequence
 from datetime import date
-from typing import Any, cast
+from functools import lru_cache
+from typing import Any
 
 import httpx
 
@@ -16,6 +18,8 @@ from .clinic_models import (
     RegisterPatientRequest,
     RescheduleRequest,
 )
+
+MAX_CONCURRENT_REQUESTS = 5
 
 
 class ProsperApiError(RuntimeError):
@@ -40,12 +44,20 @@ class ClinicApi:
         *,
         timeout_seconds: float = 10.0,
         client: httpx.Client | None = None,
+        close_client: bool = True,
     ) -> None:
         self._client = client or httpx.Client(
             base_url=base_url.rstrip("/"),
             headers={"X-Api-Key": api_key},
             timeout=timeout_seconds,
+            limits=httpx.Limits(
+                max_connections=MAX_CONCURRENT_REQUESTS,
+                max_keepalive_connections=MAX_CONCURRENT_REQUESTS,
+            ),
         )
+        self._close_client = close_client
+        self._request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
+        self._catalogue_lock = threading.Lock()
         self._catalogue: dict[str, Any] | None = None
 
     @classmethod
@@ -56,18 +68,20 @@ class ClinicApi:
             raise RuntimeError(
                 "Set PLATFORM_API_BASE_URL and PLATFORM_API_KEY before calling Prosper."
             )
-        return cls(base_url, api_key)
+        return _shared_environment_api(base_url, api_key)
 
     def close(self) -> None:
-        self._client.close()
+        if self._close_client:
+            self._client.close()
 
     def health(self) -> Any:
         return self._get("/api/v1/health")
 
     def get_clinic(self, *, refresh: bool = False) -> dict[str, Any]:
-        if self._catalogue is None or refresh:
-            self._catalogue = self._get("/api/v1/clinic")
-        return self._catalogue
+        with self._catalogue_lock:
+            if self._catalogue is None or refresh:
+                self._catalogue = self._get("/api/v1/clinic")
+            return self._catalogue
 
     def search_patients(
         self,
@@ -125,7 +139,7 @@ class ClinicApi:
             ).items()
         )
         params.extend(("insurer", insurer) for insurer in insurers or [])
-        return self._get("/api/v1/availability", params=params)
+        return self._get("/api/v1/availability", params=tuple(params))
 
     @staticmethod
     def _validate_availability_range(date_from: str, date_to: str) -> None:
@@ -172,13 +186,18 @@ class ClinicApi:
         self,
         path: str,
         *,
-        params: dict[str, str] | list[tuple[str, str]] | None = None,
+        params: dict[str, str]
+        | tuple[tuple[str, str | float | None], ...]
+        | None = None,
     ) -> dict[str, Any]:
-        response = self._client.get(path, params=cast(Any, params))
+        query = httpx.QueryParams(params) if params is not None else None
+        with self._request_slots:
+            response = self._client.get(path, params=query)
         return self._response_json(response)
 
     def _post(self, path: str, request: Any) -> dict[str, Any]:
-        response = self._client.post(path, json=request.model_dump(mode="json"))
+        with self._request_slots:
+            response = self._client.post(path, json=request.model_dump(mode="json"))
         return self._response_json(response)
 
     @staticmethod
@@ -196,3 +215,8 @@ class ClinicApi:
         if not isinstance(payload, dict):
             return {"data": payload}
         return payload
+
+
+@lru_cache(maxsize=1)
+def _shared_environment_api(base_url: str, api_key: str) -> ClinicApi:
+    return ClinicApi(base_url, api_key, close_client=False)
