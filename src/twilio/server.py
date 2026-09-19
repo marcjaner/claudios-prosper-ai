@@ -14,6 +14,7 @@ from sqlalchemy.engine import make_url
 from observability import EventBus, Store, set_bus, subscribe
 from observability.api import register_dashboard
 from scoring import DEFAULT_MODEL, run_scoring_worker
+from storage import CallRepository, Database
 
 from .transport import AgentFactory, run_call
 
@@ -71,6 +72,11 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        guardrail_database = Database()
+        await guardrail_database.init()
+        app.state.guardrail_database = guardrail_database
+        app.state.guardrail_repository = CallRepository(guardrail_database)
+        await app.state.guardrail_repository.seed_default_guardrails()
         store = Store(CONSOLE_DB_PATH)
         bus = EventBus(store)
         app.state.store = store
@@ -97,6 +103,7 @@ def create_app(
                             await task
                 set_bus(None)
                 store.close()
+                await guardrail_database.close()
 
     app = FastAPI(lifespan=lifespan)
 

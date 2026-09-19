@@ -21,6 +21,7 @@ function Field({ label, children }) {
 const PENALTY_REASONS = {
   no_action: "sin acción registrada",
   early_hangup: "cuelgue antes de 30 s",
+  guardrail_breach: "guardrail incumplido",
 };
 
 const SCORE_DIMENSIONS = [
@@ -164,6 +165,8 @@ export default function CallDetail({ callId, liveCall, liveEvents }) {
   ].sort((a, b) => a.ts - b.ts);
 
   const submission = events.find((event) => event.kind === "submit");
+  let violations = [];
+  try { violations = JSON.parse(call.guardrail_violations || "[]"); } catch { /* ignore malformed legacy data */ }
   const style = call.outcome ? outcomeStyle(call.outcome) : null;
 
   if (loading && !liveCall) {
@@ -220,9 +223,17 @@ export default function CallDetail({ callId, liveCall, liveEvents }) {
               {call.cost_eur != null && `${call.cost_eur.toFixed(4)} €`}
             </Field>
           </dl>
-          {call.error && (
+        {call.error && (
             <p className="mt-3 rounded border border-rose-900/60 bg-rose-950/40 p-2 text-xs text-rose-300">
               {call.error}
+            </p>
+          )}
+          {call.guardrail_breached && (
+            <p className="mt-3 rounded border border-amber-900/60 bg-amber-950/40 p-2 text-xs text-amber-300">
+              ⚠ Safety rule breached: the request was refused.
+              {violations.length > 0 && (
+                <ul className="mt-1 list-disc pl-4">{violations.map((item) => <li key={item.guardrail}>{item.guardrail} ({Math.round(item.probability * 100)}%)</li>)}</ul>
+              )}
             </p>
           )}
         </aside>

@@ -4,11 +4,13 @@ import CallDetail from "./CallDetail.jsx";
 import History from "./History.jsx";
 import Sparkline from "./Sparkline.jsx";
 import Wall from "./Wall.jsx";
+import Guardrails from "./Guardrails.jsx";
 import { useLiveCalls } from "./useLiveCalls.js";
 
 const VIEWS = {
   "#/wall": { label: "Wall", component: Wall },
   "#/historico": { label: "Histórico", component: History },
+  "#/guardrails": { label: "Safety rules", component: Guardrails },
 };
 const DEFAULT_VIEW = "#/wall";
 

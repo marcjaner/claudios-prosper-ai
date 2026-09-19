@@ -11,6 +11,24 @@ DASHBOARD_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 
 def register_dashboard(app: FastAPI) -> None:
+    @app.get("/api/guardrails")
+    async def list_guardrails(request: Request) -> dict:
+        rows = await request.app.state.guardrail_repository.list_guardrails()
+        return {"guardrails": [{"id": row.id, "title": row.title, "description": row.description or row.text} for row in rows]}
+
+    @app.put("/api/guardrails")
+    async def replace_guardrails(request: Request) -> dict:
+        payload = await request.json()
+        texts = payload.get("guardrails")
+        rules = payload.get("guardrails")
+        if not isinstance(rules, list) or not all(isinstance(rule, dict) for rule in rules):
+            raise HTTPException(status_code=422, detail="guardrails must be a list of objects")
+        try:
+            rows = await request.app.state.guardrail_repository.replace_guardrails(rules)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"guardrails": [{"id": row.id, "title": row.title, "description": row.description} for row in rows]}
+
     @app.get("/api/calls")
     async def list_calls(
         request: Request,

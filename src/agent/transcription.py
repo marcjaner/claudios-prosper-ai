@@ -80,6 +80,7 @@ def create_transcription_agent(
         database = Database()
         await database.init()
         repository = CallRepository(database)
+        await repository.seed_default_guardrails()
         await repository.create_call(meta.call_id, meta.from_number, meta.connected_at)
         processors = [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),

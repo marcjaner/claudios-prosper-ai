@@ -33,7 +33,19 @@ class Database:
         async with self.engine.begin() as connection:
             await connection.execute(text("PRAGMA journal_mode=WAL"))
             await connection.run_sync(Base.metadata.create_all)
+            await self._migrate_guardrails_table(connection)
             await self._migrate_calls_table(connection)
+
+    @staticmethod
+    async def _migrate_guardrails_table(connection) -> None:
+        columns = {
+            row[1]
+            for row in (await connection.execute(text("PRAGMA table_info(guardrails)"))).fetchall()
+        }
+        if "title" not in columns:
+            await connection.execute(text("ALTER TABLE guardrails ADD COLUMN title VARCHAR(80) NOT NULL DEFAULT 'Safety rule'"))
+        if "description" not in columns:
+            await connection.execute(text("ALTER TABLE guardrails ADD COLUMN description VARCHAR NOT NULL DEFAULT ''"))
 
     @staticmethod
     async def _migrate_calls_table(connection) -> None:

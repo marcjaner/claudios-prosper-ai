@@ -79,6 +79,8 @@ function CallCard({ call, now, dense }) {
   const score = parseScoreJson(call.score_json);
   const turnCount = score?.turn_count ?? 0;
   const hasScore = typeof call.score_overall === "number";
+  let violations = [];
+  try { violations = JSON.parse(call.guardrail_violations || "[]"); } catch { /* ignore malformed legacy data */ }
   const alert = live && turnCount >= 2 && hasScore && call.score_overall < 40;
 
   return (
@@ -100,6 +102,7 @@ function CallCard({ call, now, dense }) {
             {call.from_number ?? "número oculto"}
           </p>
           <p className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            {call.guardrail_breached && <span title="Safety rule breached" className="text-amber-400">⚠ {violations.map((item) => item.guardrail).join(" · ")}</span>}
             <span
               className={`inline-block h-2 w-2 rounded-full ${
                 live ? "animate-pulse bg-emerald-400" : "bg-slate-600"

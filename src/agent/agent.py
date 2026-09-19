@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from pathlib import Path
@@ -11,13 +13,14 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import yaml
+import httpx
 from pipecat.frames.frames import SystemFrame
 
 from agent.clinic_api import ClinicApi, ProsperApiError
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
 from agent.tools import create_clinic_tools, load_tools
-from agent.utils import configure_logging
+from agent.utils import configure_logging, load_environment
 from agent.workflow import available_tools, update_state
 from observability import emit, update_call
 from observability.frames import (
@@ -27,6 +30,7 @@ from observability.frames import (
     ToolCallFinishedFrame,
     ToolCallStartedFrame,
 )
+from scoring import classify_guardrail_breach
 
 if TYPE_CHECKING:
     from storage import CallRepository
@@ -43,6 +47,7 @@ SENSITIVE_ARGUMENT_MARKERS = {
 }
 EventSink = Callable[[SystemFrame], Awaitable[None]]
 TOOL_ACKNOWLEDGEMENT = "Let me check that for you."
+GUARDRAIL_REFUSAL = "I cannot help with that request. I can help you with your appointment."
 SUBMISSIONS = {
     "register_patient": ("/api/v1/submit/register", "REGISTER"),
     "book_appointment": ("/api/v1/submit/book", "BOOK"),
@@ -62,9 +67,12 @@ def _system_prompt() -> str:
         return yaml.safe_load(file)["system"]
 
 
-def _completion_prompt(prompt: str) -> str:
+def _completion_prompt(prompt: str, guardrails: str = "") -> str:
+    system_prompt = _system_prompt()
+    if guardrails:
+        system_prompt += f"\n\nConfigured guardrails (always follow):\n{guardrails}"
     return (
-        f"System prompt:\n{_system_prompt()}\n\n"
+        f"System prompt:\n{system_prompt}\n\n"
         f"Memory:\n{retrieve_memory()}\n\nCaller input:\n{prompt}"
     )
 
@@ -97,6 +105,7 @@ async def _observed_tool_completion(
     client: LLMClient,
     tools: dict[str, Tool],
     event_sink: EventSink | None,
+    guardrails: str = "",
 ) -> AgentResponse:
     request_id = uuid4().hex
     model = client.default_model
@@ -105,7 +114,7 @@ async def _observed_tool_completion(
     try:
         completion = await asyncio.to_thread(
             client.complete_with_tools,
-            _completion_prompt(prompt),
+            _completion_prompt(prompt, guardrails),
             [tool.definition for tool in tools.values()],
         )
     except Exception as exc:
@@ -143,6 +152,7 @@ async def _observed_completion(
     client: LLMClient,
     tools: dict[str, Tool],
     event_sink: EventSink | None,
+    guardrails: str = "",
 ) -> AgentResponse:
     request_id = uuid4().hex
     model = client.default_model
@@ -151,7 +161,7 @@ async def _observed_completion(
     try:
         completion = await asyncio.to_thread(
             client.complete_structured,
-            _completion_prompt(prompt),
+            _completion_prompt(prompt, guardrails),
             AgentResponse,
             extra_body={"tools": [tool.definition for tool in tools.values()]},
         )
@@ -393,6 +403,9 @@ async def run_agent_turn(
     _logger.info("starting call agent | call_id=%s prompt=%r", call_id, prompt)
     await repository.append_event(call_id, "caller_text_received", {"text": prompt})
     memory = await repository.memory_for_call(call_id)
+    await repository.seed_default_guardrails()
+    guardrails = await repository.list_guardrails()
+    guardrail_prompt = "\n".join(f"- {row.title}: {row.description or row.text}" for row in guardrails)
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
     try:
@@ -400,8 +413,35 @@ async def run_agent_turn(
         state = await repository.workflow_for_call(call_id)
         tools = _enabled_tools(all_tools, state)
         response = await _observed_tool_completion(
-            f"{prompt}\n\nCall memory:\n{memory}", llm_client, tools, event_sink
+            f"{prompt}\n\nCall memory:\n{memory}",
+            llm_client, tools, event_sink, guardrail_prompt
         )
+        load_environment()
+        api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
+        _logger.info("safety-rule JEV check gate | call_id=%s rules=%d api_key=%s", call_id, len(guardrails), bool(api_key))
+        if api_key and guardrails:
+            async with httpx.AsyncClient(timeout=15) as jev_client:
+                # This is deliberately a separate JEV request from the normal
+                # conversation-quality scoring worker.
+                classification = await classify_guardrail_breach(
+                    [{"speaker": "patient", "text": prompt}, {"speaker": "agent", "text": response.immediate_answer}],
+                    [f"{row.title}: {row.description or row.text}" for row in guardrails], jev_client, api_key,
+                )
+            if classification["breached"]:
+                violations = classification["violations"]
+                reason = "; ".join(item["guardrail"].split(":", 1)[0] for item in violations)
+                violations = [{**item, "guardrail": item["guardrail"].split(":", 1)[0]} for item in violations]
+                await repository.append_event(call_id, "guardrail_breach", {"reason": reason})
+                _logger.warning("safety rule breach classified by JEV | call_id=%s reason=%s", call_id, reason)
+                update_call(
+                    call_id,
+                    guardrail_breached=1,
+                    guardrail_reason=reason,
+                    guardrail_violations=json.dumps(violations, ensure_ascii=False),
+                )
+                response = AgentResponse(immediate_answer=GUARDRAIL_REFUSAL, tool_calls=[])
+                yield response
+                return
         _logger.info(
             "agent response model | call_id=%s response=%s",
             call_id,
@@ -555,6 +595,7 @@ async def run_agent_turn(
                 llm_client,
                 {},
                 event_sink,
+                guardrail_prompt,
             )
             _logger.info(
                 "agent follow-up model | call_id=%s response=%s",

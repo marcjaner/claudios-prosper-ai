@@ -36,6 +36,7 @@ const RENDERED = new Set([
   "tool_result",
   "submit",
   "error",
+  "guardrail_breach",
 ]);
 
 function offset(event, startedAt) {
@@ -81,6 +82,16 @@ function ToolChip({ event }) {
           {JSON.stringify(response.response ?? response.result ?? response.error ?? {}, null, 2)}
         </pre>
       )}
+    </div>
+  );
+}
+
+function GuardrailBreach({ event }) {
+  return (
+    <div className="rounded-lg border border-amber-800/70 bg-amber-950/30 px-3 py-2 text-amber-300">
+      <span className="mr-2">⚠</span>
+      <span className="text-xs uppercase tracking-wide">Safety rule breach</span>
+      <p className="mt-1 text-xs text-amber-200/80">{event.payload.reason}</p>
     </div>
   );
 }
@@ -133,6 +144,8 @@ export default function Transcript({ events: incoming, startedAt, live }) {
                     {event.payload.text}
                   </span>
                 </p>
+              ) : event.kind === "guardrail_breach" ? (
+                <GuardrailBreach event={event} />
               ) : (
                 <ToolChip event={event} />
               )}
