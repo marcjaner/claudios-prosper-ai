@@ -1,0 +1,41 @@
+{
+  "entry": "identificar",
+  "nodes": [
+    {
+      "id": "identificar",
+      "prompt": "Averigua quién llama y búscalo en el directorio con search_patients. En cuanto la búsqueda devuelva una ficha, registra patient_id con record_facts y pasa a consultar con go_to.",
+      "tools": [
+        "search_patients",
+        "get_clinic_catalogue"
+      ],
+      "clears": [],
+      "position": {
+        "x": 0,
+        "y": 100
+      }
+    },
+    {
+      "id": "consultar",
+      "prompt": "Ya sabes quién llama. Busca huecos reales con search_availability y ofrécele una hora concreta.",
+      "tools": [
+        "get_clinic_catalogue",
+        "get_patient_appointments",
+        "search_availability"
+      ],
+      "clears": [],
+      "position": {
+        "x": 340,
+        "y": 100
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "identificar",
+      "to": "consultar",
+      "requires": [
+        "patient_id"
+      ]
+    }
+  ]
+}

@@ -81,6 +81,8 @@ export default function Builder() {
   const [tools, setTools] = useState([]);
   const [selected, setSelected] = useState(null);
   const [status, setStatus] = useState("");
+  // Renaming on every keystroke would forbid clearing the field to retype.
+  const [draftId, setDraftId] = useState(null);
 
   useEffect(() => {
     Promise.all([
@@ -125,6 +127,24 @@ export default function Builder() {
           : edge,
       ),
     );
+
+  const renameStage = (from, to) => {
+    const trimmed = to.trim();
+    setDraftId(null);
+    if (!trimmed || trimmed === from || nodes.some((node) => node.id === trimmed)) return;
+    setNodes((current) =>
+      current.map((node) => (node.id === from ? { ...node, id: trimmed } : node)),
+    );
+    setEdges((current) =>
+      current.map((edge) => ({
+        ...edge,
+        source: edge.source === from ? trimmed : edge.source,
+        target: edge.target === from ? trimmed : edge.target,
+      })),
+    );
+    if (entry === from) setEntry(trimmed);
+    setSelected({ kind: "node", id: trimmed });
+  };
 
   const addStage = () => {
     const id = `etapa_${nodes.length + 1}`;
@@ -226,7 +246,10 @@ export default function Builder() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
-          onNodeClick={(_, clicked) => setSelected({ kind: "node", id: clicked.id })}
+          onNodeClick={(_, clicked) => {
+            setDraftId(null);
+            setSelected({ kind: "node", id: clicked.id });
+          }}
           onEdgeClick={(_, clicked) => setSelected({ kind: "edge", id: clicked.id })}
           onPaneClick={() => setSelected(null)}
           fitView
@@ -247,8 +270,14 @@ export default function Builder() {
 
         {node && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="font-medium text-slate-200">{node.id}</h2>
+            <div className="flex items-center justify-between gap-2">
+              <input
+                value={draftId ?? node.id}
+                onChange={(event) => setDraftId(event.target.value)}
+                onBlur={(event) => renameStage(node.id, event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+                className="min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-sm text-slate-100"
+              />
               {entry !== node.id && (
                 <button
                   onClick={() => makeEntry(node.id)}

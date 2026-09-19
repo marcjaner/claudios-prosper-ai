@@ -1,27 +1,45 @@
 {
-  "entry": "assistant",
+  "entry": "identificar",
   "nodes": [
     {
-      "id": "assistant",
-      "prompt": "",
+      "id": "identificar",
+      "prompt": "Averigua quién llama y búscalo en el directorio con search_patients (nombre completo, DNI, teléfono o fecha de nacimiento). En cuanto la búsqueda devuelva una ficha, registra su identificador exactamente como patient_id usando record_facts, y pasa a reservar con go_to. Si no aparece en el directorio, dilo y escala en lugar de inventarlo.",
       "tools": [
-        "get_clinic_catalogue",
         "search_patients",
-        "get_patient_appointments",
-        "search_availability",
-        "register_patient",
-        "book_appointment",
-        "reschedule_appointment",
-        "cancel_appointment",
-        "submit_no_action",
+        "get_clinic_catalogue",
         "escalate_to_human"
       ],
       "clears": [],
       "position": {
         "x": 0,
-        "y": 0
+        "y": 140
+      }
+    },
+    {
+      "id": "reservar",
+      "prompt": "Ya sabes quién llama. Consulta el catálogo para obtener los identificadores reales, busca huecos con search_availability y ofrece una hora concreta. Reserva solo con los identificadores y el hueco que devolvió la clínica; no inventes ninguno. Termina siempre la llamada con una acción: reserva, o no_action, o escalado.",
+      "tools": [
+        "get_clinic_catalogue",
+        "get_patient_appointments",
+        "search_availability",
+        "book_appointment",
+        "submit_no_action",
+        "escalate_to_human"
+      ],
+      "clears": [],
+      "position": {
+        "x": 380,
+        "y": 140
       }
     }
   ],
-  "edges": []
+  "edges": [
+    {
+      "from": "identificar",
+      "to": "reservar",
+      "requires": [
+        "patient_id"
+      ]
+    }
+  ]
 }
