@@ -1,4 +1,5 @@
 import logging
+import time
 
 from pipecat.frames.frames import Frame, LLMContextFrame, SystemFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -8,6 +9,7 @@ from observability.frames import TTSRequestedFrame
 from .agent import run_agent_turn
 
 logger = logging.getLogger(__name__)
+CALL_LIMIT_SECONDS = 180
 
 
 class AgentReply(FrameProcessor):
@@ -15,6 +17,7 @@ class AgentReply(FrameProcessor):
         super().__init__()
         self.call_id = call_id
         self.repository = repository
+        self.started_at = time.monotonic()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -35,6 +38,9 @@ class AgentReply(FrameProcessor):
                 self.call_id,
                 self.repository,
                 event_sink=self._emit_event,
+                seconds_remaining=max(
+                    0, CALL_LIMIT_SECONDS - (time.monotonic() - self.started_at)
+                ),
             ):
                 logger.info(
                     "agent response ready | call_id=%s answer=%r tool_calls=%s",

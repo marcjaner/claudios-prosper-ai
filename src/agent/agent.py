@@ -239,6 +239,7 @@ async def run_agent_turn(
     client: LLMClient | None = None,
     *,
     event_sink: EventSink | None = None,
+    seconds_remaining: float | None = None,
 ):
     """Yield the immediate reply, then a reply synthesized from tool results."""
     configure_logging()
@@ -247,12 +248,19 @@ async def run_agent_turn(
     memory = await repository.memory_for_call(call_id)
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
+    turn_started_at = time.monotonic()
     try:
         all_tools = load_tools(create_clinic_tools(api, call_id))
         state = await repository.workflow_for_call(call_id)
         tools = _enabled_tools(all_tools, state)
         response = await _observed_tool_completion(
-            f"{prompt}\n\nCall memory:\n{memory}", llm_client, tools, event_sink
+            _with_call_budget(
+                f"{prompt}\n\nCall memory:\n{memory}",
+                _remaining_seconds(seconds_remaining, turn_started_at),
+            ),
+            llm_client,
+            tools,
+            event_sink,
         )
         _logger.info(
             "agent response model | call_id=%s response=%s",
@@ -304,7 +312,10 @@ async def run_agent_turn(
                     {"output": output},
                 )
 
-            follow_up_prompt = _tool_follow_up_prompt(prompt, memory, tool_history)
+            follow_up_prompt = _with_call_budget(
+                _tool_follow_up_prompt(prompt, memory, tool_history),
+                _remaining_seconds(seconds_remaining, turn_started_at),
+            )
             if tool_round == MAX_TOOL_ROUNDS - 1:
                 follow_up = await _observed_completion(
                     follow_up_prompt
@@ -341,6 +352,36 @@ async def run_agent_turn(
             return
     finally:
         await asyncio.to_thread(api.close)
+
+
+def _remaining_seconds(initial: float | None, started_at: float) -> int | None:
+    if initial is None:
+        return None
+    return max(0, int(initial - (time.monotonic() - started_at)))
+
+
+def _with_call_budget(prompt: str, seconds_remaining: int | None) -> str:
+    if seconds_remaining is None:
+        return prompt
+    if seconds_remaining <= 20:
+        instruction = (
+            "Act immediately. If every required argument is known, call the final "
+            "action tool now. Otherwise ask once for all missing required details."
+        )
+    elif seconds_remaining <= 45:
+        instruction = (
+            "Time is short. Skip optional confirmations and explanations, and gather "
+            "the remaining required details in one manageable question."
+        )
+    else:
+        instruction = (
+            "Keep the shortest valid path. Group up to three related missing details "
+            "when that reduces unnecessary turns."
+        )
+    return (
+        f"{prompt}\n\nCall deadline: {seconds_remaining} seconds remain before the "
+        f"platform disconnects. {instruction} Never guess missing values."
+    )
 
 
 async def _execute_tool_call(
