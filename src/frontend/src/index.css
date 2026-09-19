@@ -4,9 +4,21 @@
   color-scheme: dark;
 }
 
-.wall-theme {
+.clinic-theme {
   color-scheme: light;
   font-family: "Avenir Next", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+}
+
+.clinic-page {
+  @apply mx-auto max-w-[1500px] px-5 py-8 sm:px-8 lg:px-10 lg:py-10;
+}
+
+.clinic-panel {
+  @apply rounded-[22px] border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)];
+}
+
+.clinic-control {
+  @apply rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-emerald-400;
 }
 
 .call-panel {
@@ -16,4 +28,12 @@
 
 .call-panel-header {
   @apply flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-800/70 px-4 py-3;
+}
+
+.clinic-theme .call-panel {
+  @apply border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)];
+}
+
+.clinic-theme .call-panel-header {
+  @apply border-slate-100;
 }

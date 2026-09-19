@@ -4,23 +4,23 @@
 // So colour carries the group and the verb is always spelled out in text.
 // Validated as a set against the card surface (#0f172a) in dark mode.
 export const GROUPS = {
-  wrote: { label: "Acción sobre la agenda", color: "#199e70" },
-  closed: { label: "Cerrada sin escribir", color: "#9085e9" },
-  absent: { label: "Sin registro", color: "#e66767" },
+  wrote: { label: "Schedule updated", color: "#199e70" },
+  closed: { label: "Closed without changes", color: "#9085e9" },
+  absent: { label: "No record", color: "#e66767" },
 };
 
 export const OUTCOMES = {
-  BOOK: { label: "Reserva", group: "wrote" },
-  RESCHEDULE: { label: "Cambio", group: "wrote" },
-  CANCEL: { label: "Cancelación", group: "wrote" },
-  REGISTER: { label: "Alta", group: "wrote" },
-  NO_ACTION: { label: "Sin acción", group: "closed" },
-  ESCALATE: { label: "Escalada", group: "closed" },
+  BOOK: { label: "Booked", group: "wrote" },
+  RESCHEDULE: { label: "Rescheduled", group: "wrote" },
+  CANCEL: { label: "Cancelled", group: "wrote" },
+  REGISTER: { label: "Registered", group: "wrote" },
+  NO_ACTION: { label: "No action", group: "closed" },
+  ESCALATE: { label: "Escalated", group: "closed" },
 };
 
 export function outcomeStyle(outcome) {
   const entry = OUTCOMES[outcome];
-  if (!entry) return { label: "Sin registro", color: GROUPS.absent.color };
+  if (!entry) return { label: "No record", color: GROUPS.absent.color };
   return { label: entry.label, color: GROUPS[entry.group].color };
 }
 
