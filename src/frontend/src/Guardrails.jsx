@@ -57,7 +57,7 @@ export default function Guardrails() {
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Configuration</p>
-          <h2 className="text-3xl font-semibold tracking-[-0.04em] text-slate-950">Safety rules</h2>
+          <h2 className="text-3xl font-semibold tracking-[-0.04em] text-slate-950">Rules</h2>
           <p className="mt-2 text-sm text-slate-500">Rules the receptionist must follow on every call.</p>
         </div>
         <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${saved ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
@@ -95,7 +95,7 @@ export default function Guardrails() {
           </div>
         ))}
       </div>
-      <button type="button" onClick={() => sync([...guardrails, { title: "", description: "" }])} className="mt-5 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-500 transition-colors hover:border-emerald-400 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-emerald-400">+ Add safety rule</button>
+      <button type="button" onClick={() => sync([...guardrails, { title: "", description: "" }])} className="mt-5 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-500 transition-colors hover:border-emerald-400 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-emerald-400">+ Add rule</button>
       {error && <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
     </main>
   );

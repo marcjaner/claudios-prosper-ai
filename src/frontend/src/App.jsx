@@ -10,7 +10,7 @@ import { useLiveCalls } from "./useLiveCalls.js";
 const VIEWS = {
   "#/wall": { label: "Wall", component: Wall },
   "#/historico": { label: "Histórico", component: History },
-  "#/guardrails": { label: "Safety rules", component: Guardrails },
+  "#/guardrails": { label: "Rules", component: Guardrails },
 };
 const DEFAULT_VIEW = "#/wall";
 
@@ -101,7 +101,7 @@ export default function App() {
               }
             >
               {clinicTheme
-                ? { "#/wall": "Wall", "#/historico": "History", "#/guardrails": "Safety rules" }[hash]
+                ? { "#/wall": "Wall", "#/historico": "History", "#/guardrails": "Rules" }[hash]
                 : label}
             </a>
           ))}
