@@ -15,9 +15,10 @@ from pipecat.frames.frames import SystemFrame
 
 from agent.clinic_api import ClinicApi, ProsperApiError
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
-from agent.models import AgentResponse, ToolCall, ToolResult
+from agent.models import AgentResponse, Tool, ToolCall, ToolResult
 from agent.tools import create_clinic_tools, load_tools
 from agent.utils import configure_logging
+from agent.workflow import available_tools, update_state
 from observability import emit, update_call
 from observability.frames import (
     LLMRequestFailedFrame,
@@ -69,11 +70,11 @@ def _completion_prompt(prompt: str) -> str:
 
 
 def _completion(
-    prompt: str, client: LLMClient | None, tools: dict[str, dict[str, Any]]
+    prompt: str, client: LLMClient | None, tools: dict[str, Tool]
 ) -> AgentResponse:
     completion = (client or get_llm_client()).complete_with_tools(
         _completion_prompt(prompt),
-        [tool["definition"] for tool in tools.values()],
+        [tool.definition for tool in tools.values()],
     )
     return _agent_response(completion)
 
@@ -94,7 +95,7 @@ def _agent_response(completion: ToolCompletion) -> AgentResponse:
 async def _observed_tool_completion(
     prompt: str,
     client: LLMClient,
-    tools: dict[str, dict[str, Any]],
+    tools: dict[str, Tool],
     event_sink: EventSink | None,
 ) -> AgentResponse:
     request_id = uuid4().hex
@@ -105,7 +106,7 @@ async def _observed_tool_completion(
         completion = await asyncio.to_thread(
             client.complete_with_tools,
             _completion_prompt(prompt),
-            [tool["definition"] for tool in tools.values()],
+            [tool.definition for tool in tools.values()],
         )
     except Exception as exc:
         await _emit(
@@ -140,7 +141,7 @@ async def _observed_tool_completion(
 async def _observed_completion(
     prompt: str,
     client: LLMClient,
-    tools: dict[str, dict[str, Any]],
+    tools: dict[str, Tool],
     event_sink: EventSink | None,
 ) -> AgentResponse:
     request_id = uuid4().hex
@@ -152,7 +153,7 @@ async def _observed_completion(
             client.complete_structured,
             _completion_prompt(prompt),
             AgentResponse,
-            extra_body={"tools": [tool["definition"] for tool in tools.values()]},
+            extra_body={"tools": [tool.definition for tool in tools.values()]},
         )
     except Exception as exc:
         await _emit(
@@ -184,6 +185,11 @@ async def _observed_completion(
     return completion.data
 
 
+def _enabled_tools(tools: dict[str, Tool], state: dict[str, Any]) -> dict[str, Tool]:
+    enabled = available_tools(state)
+    return {name: tool for name, tool in tools.items() if name in enabled}
+
+
 def run_agent(
     prompt: str,
     client: LLMClient | None = None,
@@ -199,6 +205,8 @@ def run_agent(
         if clinic_api is not None and call_id is not None
         else []
     )
+    state: dict[str, Any] = {}
+    tools = _enabled_tools(tools, state)
     response = _completion(prompt, client, tools)
     _logger.info("Agent produced immediate answer and %d tool call(s)", len(response.tool_calls))
     _logger.debug("Structured agent response: %s", response.model_dump())
@@ -238,7 +246,7 @@ def run_agent(
             continue
         started = time.monotonic()
         try:
-            output = tool["execute"](**call.arguments)
+            output = tool.execute(**call.arguments)
         except ProsperApiError as exc:
             elapsed_ms = _elapsed_ms(started)
             _logger.warning("Prosper rejected tool=%s status=%s", call.name, exc.status_code)
@@ -388,7 +396,9 @@ async def run_agent_turn(
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
     try:
-        tools = load_tools(create_clinic_tools(api, call_id))
+        all_tools = load_tools(create_clinic_tools(api, call_id))
+        state = await repository.workflow_for_call(call_id)
+        tools = _enabled_tools(all_tools, state)
         response = await _observed_tool_completion(
             f"{prompt}\n\nCall memory:\n{memory}", llm_client, tools, event_sink
         )
@@ -404,6 +414,7 @@ async def run_agent_turn(
 
         tool_results = []
         for call in response.tool_calls:
+            tool = _enabled_tools(all_tools, state).get(call.name)
             tool_call_id = uuid4().hex
             started_ns = time.perf_counter_ns()
             emit(
@@ -423,7 +434,6 @@ async def run_agent_turn(
                     arguments=_safe_arguments(call.arguments),
                 ),
             )
-            tool = tools.get(call.name)
             status = 404 if tool is None else 200
             succeeded = False
             output: Any = f"Unknown tool: {call.name}"
@@ -439,7 +449,7 @@ async def run_agent_turn(
             else:
                 try:
                     output = await asyncio.to_thread(
-                        tool["execute"], **call.arguments
+                        tool.execute, **call.arguments
                     )
                 except ProsperApiError as exc:
                     status = exc.status_code
@@ -497,6 +507,9 @@ async def run_agent_turn(
                         ),
                     )
                     _record_success(call_id, call.name, call.arguments, output)
+            if succeeded and not isinstance(output, str):
+                state = update_state(state, call.name, output)
+                await repository.save_workflow(call_id, state)
             await repository.append_event(
                 call_id,
                 "tool_call",
@@ -555,7 +568,7 @@ async def run_agent_turn(
             )
             yield follow_up
     finally:
-        api.close()
+        await asyncio.to_thread(api.close)
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:

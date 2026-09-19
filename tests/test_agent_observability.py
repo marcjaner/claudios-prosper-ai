@@ -1,5 +1,6 @@
 import asyncio
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
@@ -71,19 +72,25 @@ class FakeClinicApi:
     def no_action(self, request):
         return self._respond("submit_no_action")
 
+    def get_clinic(self):
+        return self._respond("get_clinic_catalogue")
+
     def close(self):
         pass
 
 
 def run(response: AgentResponse, api: FakeClinicApi):
-    return list(
-        run_agent(
-            "hola",
-            cast(Any, FakeClient(response)),
-            clinic_api=cast(ClinicApi, api),
-            call_id="CA456",
+    with patch(
+        "agent.agent._enabled_tools", side_effect=lambda tools, state: tools
+    ):
+        return list(
+            run_agent(
+                "hola",
+                cast(Any, FakeClient(response)),
+                clinic_api=cast(ClinicApi, api),
+                call_id="CA456",
+            )
         )
-    )
 
 
 def test_tool_call_and_result_share_a_tool_call_id(bus):
@@ -245,15 +252,22 @@ BOOK_ARGS = {
 
 
 class FakeRepository:
-    def __init__(self):
+    def __init__(self, state=None):
         self.events = []
         self.submissions = []
+        self.workflow = dict(state or {})
 
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
 
     async def memory_for_call(self, call_id):
         return ""
+
+    async def workflow_for_call(self, call_id):
+        return dict(self.workflow)
+
+    async def save_workflow(self, call_id, state):
+        self.workflow = dict(state)
 
     async def record_submission(
         self, call_id, action, request, response_status, response
@@ -283,11 +297,11 @@ class FakeTurnClient:
         )
 
 
-def run_turn(monkeypatch, response, api):
+def run_turn(monkeypatch, response, api, *, state=None):
     monkeypatch.setattr(
         ClinicApi, "from_environment", classmethod(lambda cls: api)
     )
-    repository = FakeRepository()
+    repository = FakeRepository(state)
     client = cast(Any, FakeTurnClient(response))
 
     async def collect():
@@ -311,6 +325,7 @@ def test_turn_book_emits_tool_events_outcome_and_one_submission(
             tool_calls=[ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
         ),
         FakeClinicApi(results={"book_appointment": {"record": {"id": "A1"}}}),
+        state={"patient_id": "P00042", "catalogue_data": {"loaded": True}},
     )
 
     tool_call = next(e for e in bus.events if e[1] == "tool_call")
@@ -339,6 +354,7 @@ def test_turn_book_failure_records_no_outcome_or_submission(monkeypatch, bus):
             tool_calls=[ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
         ),
         FakeClinicApi(fail_with=ProsperApiError(422, {"detail": "slot taken"})),
+        state={"patient_id": "P00042", "catalogue_data": {"loaded": True}},
     )
 
     tool_result = next(e for e in bus.events if e[1] == "tool_result")
@@ -400,4 +416,69 @@ def test_turn_no_action_records_reason_and_outcome(monkeypatch, bus):
     assert update[1]["outcome"] == "NO_ACTION"
     assert update[1]["reason"] == "no_availability"
     assert [s[1] for s in repository.submissions] == ["NO_ACTION"]
+    assert len(responses) == 2
+
+
+def test_turn_book_is_blocked_before_identification(monkeypatch, bus):
+    responses, repository = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="Un momento.",
+            tool_calls=[ToolCall(name="book_appointment", arguments=BOOK_ARGS)],
+        ),
+        FakeClinicApi(),
+    )
+
+    tool_result = next(e for e in bus.events if e[1] == "tool_result")
+    assert tool_result[2]["status"] == 404
+    assert not any(e[1] == "submit" for e in bus.events)
+    assert not any("outcome" in fields for _, fields in bus.updates)
+    assert repository.submissions == []
+    assert repository.workflow == {}
+    assert len(responses) == 2
+
+
+def test_turn_unlocks_stages_within_one_turn(monkeypatch, bus):
+    responses, repository = run_turn(
+        monkeypatch,
+        AgentResponse(
+            immediate_answer="Un momento.",
+            tool_calls=[
+                ToolCall(name="search_patients", arguments={"name": "Ana"}),
+                ToolCall(name="get_clinic_catalogue", arguments={}),
+                ToolCall(name="book_appointment", arguments=BOOK_ARGS),
+            ],
+        ),
+        FakeClinicApi(
+            results={
+                "search_patients": {
+                    "matches": [
+                        {
+                            "patient_id": "P00042",
+                            "given_name": "Ana",
+                            "first_surname": "García",
+                            "second_surname": "López",
+                            "insurer": "sanitas",
+                        }
+                    ]
+                },
+                "get_clinic_catalogue": {"specialties": ["dermatología"]},
+                "book_appointment": {"record": {"id": "A1"}},
+            }
+        ),
+    )
+
+    tool_results = [e for e in bus.events if e[1] == "tool_result"]
+    assert [e[2]["status"] for e in tool_results] == [200, 200, 200]
+    tool_calls = [e for e in bus.events if e[1] == "tool_call"]
+    assert len(tool_calls) == 3
+    assert {
+        result[2]["tool_call_id"] for result in tool_results
+    } == {call[2]["tool_call_id"] for call in tool_calls}
+
+    assert repository.workflow["patient_id"] == "P00042"
+    assert repository.workflow["catalogue_data"]
+    assert [s[1] for s in repository.submissions] == ["BOOK"]
+    update = next(u for u in bus.updates if "outcome" in u[1])
+    assert update[1]["outcome"] == "BOOK"
     assert len(responses) == 2

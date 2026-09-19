@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 USER_TURN_STOP_TIMEOUT_SECONDS = 6
+INITIAL_GREETING = "Clínica Arenal, ¿en qué puedo ayudarle?"
 
 
 async def log_completed_turn(meta: CallMeta, content: str) -> None:

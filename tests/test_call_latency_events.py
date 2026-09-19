@@ -34,12 +34,19 @@ class FakeRepository:
     def __init__(self):
         self.events = []
         self.submissions = []
+        self.workflow = {}
 
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
 
     async def memory_for_call(self, call_id):
         return ""
+
+    async def workflow_for_call(self, call_id):
+        return {}
+
+    async def save_workflow(self, call_id, state):
+        self.workflow = state
 
     async def record_submission(self, *arguments):
         self.submissions.append(arguments)
