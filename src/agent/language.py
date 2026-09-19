@@ -22,7 +22,10 @@ from tts import language_settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_LANGUAGE = Language.EN
-AGREEING_TURNS = 2
+# A single utterance is a weak read (a Spanish name in an English sentence comes
+# back as Spanish), so the call language only moves once this many transcripts in
+# a row agree. Kept high so a stray name or place never flips a settled call.
+AGREEING_TURNS = 3
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,12 @@ def phrases(language: Language) -> Phrases:
 
 def reply_instruction(language: Language) -> str:
     written = PHRASES.get(language)
-    return f"Reply to the caller in {written.name if written else language.value}."
+    name = written.name if written else language.value
+    return (
+        f"LANGUAGE: respond ONLY in {name}. Every word of your reply must be in "
+        f"{name}, even when the caller's name, an email or a place sounds foreign. "
+        f"Never mix languages."
+    )
 
 
 def _base(language: Language) -> Language:
