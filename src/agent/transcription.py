@@ -18,7 +18,8 @@ from stt import (
 from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
-from .hardcoded_reply import HardcodedReply
+from .clinic_api import ClinicApi
+from .reply import AgentReply
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 
@@ -27,39 +28,45 @@ async def log_completed_turn(meta: CallMeta, content: str) -> None:
     logger.info("completed user turn | call_id={} text={}", meta.call_id, content)
 
 
-def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
+def create_context_aggregators(
+    meta: CallMeta, on_completed_turn: CompletedTurnCallback
+):
     params = LLMUserAggregatorParams(
         user_turn_stop_timeout=30,
         user_turn_strategies=UserTurnStrategies(
             stop=[DeepgramEndpointingStopStrategy()]
         ),
     )
-    aggregator = LLMContextAggregatorPair(
+    aggregators = LLMContextAggregatorPair(
         LLMContext(), user_params=params, realtime_service_mode=False
-    ).user()
+    )
+    user_aggregator = aggregators.user()
 
-    @aggregator.event_handler("on_user_turn_stopped")
+    @user_aggregator.event_handler("on_user_turn_stopped")
     async def _on_user_turn_stopped(_aggregator, _strategy, message):
         if message.content:
             await on_completed_turn(meta, message.content)
 
-    return aggregator
+    return aggregators
+
+
+def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
+    return create_context_aggregators(meta, on_completed_turn).user()
 
 
 def create_transcription_agent(
     on_completed_turn: CompletedTurnCallback = log_completed_turn,
-    reply: str | None = None,
 ) -> AgentFactory:
     async def build_agent(meta: CallMeta):
-        processors = [
+        aggregators = create_context_aggregators(meta, on_completed_turn)
+        return [
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
-            create_user_aggregator(meta, on_completed_turn),
+            aggregators.user(),
+            AgentReply(meta, ClinicApi.from_environment()),
+            create_tts(),
+            aggregators.assistant(),
         ]
-        if reply:
-            # Until the LLM exists: the same spoken answer to every turn.
-            processors += [HardcodedReply(reply), create_tts()]
-        return processors
 
     return build_agent
