@@ -2,15 +2,17 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import Frame, InterimTranscriptionFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from observability import emit
+from observability import emit, update_call
 from storage import CallRepository, Database
 from stt import (
     DeepgramEndpointingStopStrategy,
@@ -34,6 +36,19 @@ async def log_completed_turn(meta: CallMeta, content: str) -> None:
     logger.info("completed user turn | call_id=%s text=%s", meta.call_id, content)
 
 
+class TranscriptObserver(FrameProcessor):
+    def __init__(self, meta: CallMeta):
+        super().__init__()
+        self._meta = meta
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, InterimTranscriptionFrame):
+            emit(self._meta.call_id, "stt_partial", {"text": frame.text})
+            update_call(self._meta.call_id, state="listening")
+        await self.push_frame(frame, direction)
+
+
 def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
     params = LLMUserAggregatorParams(
         user_turn_stop_timeout=USER_TURN_STOP_TIMEOUT_SECONDS,
@@ -51,6 +66,8 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
             "user turn stopped | call_id=%s content=%r", meta.call_id, message.content
         )
         if message.content:
+            emit(meta.call_id, "stt_final", {"text": message.content})
+            update_call(meta.call_id, state="thinking")
             await on_completed_turn(meta, message.content)
 
     return aggregator
@@ -71,6 +88,7 @@ def create_transcription_agent(
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
+            TranscriptObserver(meta),
             create_user_aggregator(meta, on_completed_turn),
             AgentReply(meta.call_id, repository, state),
             create_tts(),

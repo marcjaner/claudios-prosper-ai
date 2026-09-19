@@ -19,6 +19,107 @@ function Field({ label, children }) {
   );
 }
 
+const PENALTY_REASONS = {
+  no_action: "sin acción registrada",
+  early_hangup: "cuelgue antes de 30 s",
+};
+
+const SCORE_DIMENSIONS = [
+  ["resolution", "Resolución"],
+  ["conversation", "Conversación"],
+  ["personalization", "Personalización"],
+  ["safety", "Seguridad"],
+  ["language", "Idioma y accesibilidad"],
+];
+
+function parseScore(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function Scoring({ call }) {
+  const score = parseScore(call.score_json);
+  if (!score) {
+    return (
+      <div className="rounded-xl border border-rose-900/60 bg-rose-950/40 p-4">
+        <h3 className="mb-1 text-xs uppercase tracking-wide text-rose-300/80">
+          Puntuación
+        </h3>
+        <p className="text-xs text-rose-300">{call.score_error ?? "puntuación no disponible"}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="font-mono text-3xl tabular-nums text-slate-100">
+          {Math.round(score.overall)}
+        </span>
+        <span className="text-sm text-slate-500">/100</span>
+        <span className="text-xs text-slate-500">
+          calidad observable en la transcripción
+        </span>
+        <span className="font-mono text-xs text-slate-500">
+          {score.final === false
+            ? `en directo · ${score.turn_count ?? 0} ${
+                (score.turn_count ?? 0) === 1 ? "respuesta" : "respuestas"
+              }`
+            : "final"}
+        </span>
+        <span className="ml-auto font-mono text-xs text-slate-600">
+          {score.model}
+          {score.scored_at != null &&
+            ` · ${timeFormat.format(new Date(score.scored_at * 1000))}`}
+        </span>
+      </div>
+      {score.penalty?.points > 0 && (
+        <p className="mt-3 rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+          Penalización −{score.penalty.points} puntos
+          <span className="text-amber-400/80">
+            {" · "}
+            {score.penalty.reasons
+              ?.map((reason) => PENALTY_REASONS[reason] ?? reason)
+              .join(", ")}
+          </span>
+          <span className="ml-2 font-mono text-amber-400/70">
+            Jev: {score.raw_overall}
+          </span>
+        </p>
+      )}
+      <div className="mt-3 space-y-2">
+        {SCORE_DIMENSIONS.map(([key, label]) => {
+          const dimension = score.dimensions?.[key];
+          if (!dimension || typeof dimension.score !== "number") return null;
+          const percent = (dimension.score / 4) * 100;
+          return (
+            <div key={key} className="flex items-center gap-3">
+              <span className="w-40 shrink-0 text-xs text-slate-400">{label}</span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-emerald-500"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+              <span className="w-10 text-right font-mono text-xs tabular-nums text-slate-300">
+                {Math.round(percent)}
+              </span>
+              <span className="w-20 text-right font-mono text-xs tabular-nums text-slate-600">
+                {typeof dimension.confidence === "number"
+                  ? `conf. ${Math.round(dimension.confidence * 100)}%`
+                  : ""}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Submission({ event }) {
   const failed = event.payload.status >= 400;
   return (
@@ -128,6 +229,7 @@ export default function CallDetail({ callId, liveCall, liveEvents }) {
         </aside>
 
         <section className="space-y-4">
+          {(call.score_json || call.score_error) && <Scoring call={call} />}
           <StageTrace events={events} startedAt={call.started_at} />
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="mb-3 text-xs uppercase tracking-wide text-slate-500">

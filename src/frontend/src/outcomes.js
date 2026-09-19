@@ -1,21 +1,27 @@
-// The six verbs a call can end in. Colours are categorical identity, not
-// status: a refusal with the right reason scores exactly like a booking, so
-// painting NO_ACTION red would lie about what the agent did.
+// A call either changed the clinic's diary, closed with a reasoned record, or
+// left nothing behind. Only the last always fails the case: NO_ACTION with the
+// right reason scores exactly like a booking, and problems 6 and 14 require it.
+// So colour carries the group and the verb is always spelled out in text.
 // Validated as a set against the card surface (#0f172a) in dark mode.
-export const OUTCOMES = {
-  BOOK: { label: "Reserva", color: "#3987e5" },
-  RESCHEDULE: { label: "Cambio", color: "#d95926" },
-  CANCEL: { label: "Cancelación", color: "#199e70" },
-  REGISTER: { label: "Alta", color: "#c98500" },
-  NO_ACTION: { label: "Sin acción", color: "#d55181" },
-  ESCALATE: { label: "Escalada", color: "#9085e9" },
+export const GROUPS = {
+  wrote: { label: "Acción sobre la agenda", color: "#199e70" },
+  closed: { label: "Cerrada sin escribir", color: "#9085e9" },
+  absent: { label: "Sin registro", color: "#e66767" },
 };
 
-// An absence of outcome is not an identity, so it takes recessive ink.
-export const UNRECORDED = { label: "Sin registrar", color: "#475569" };
+export const OUTCOMES = {
+  BOOK: { label: "Reserva", group: "wrote" },
+  RESCHEDULE: { label: "Cambio", group: "wrote" },
+  CANCEL: { label: "Cancelación", group: "wrote" },
+  REGISTER: { label: "Alta", group: "wrote" },
+  NO_ACTION: { label: "Sin acción", group: "closed" },
+  ESCALATE: { label: "Escalada", group: "closed" },
+};
 
 export function outcomeStyle(outcome) {
-  return OUTCOMES[outcome] ?? UNRECORDED;
+  const entry = OUTCOMES[outcome];
+  if (!entry) return { label: "Sin registro", color: GROUPS.absent.color };
+  return { label: entry.label, color: GROUPS[entry.group].color };
 }
 
 // The platform's closed vocabulary. The first eleven mirror the clinic's own

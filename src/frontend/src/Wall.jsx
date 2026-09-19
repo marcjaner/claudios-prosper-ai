@@ -63,16 +63,31 @@ function DurationRing({ seconds, live }) {
   );
 }
 
+function parseScoreJson(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 function CallCard({ call, now, dense }) {
   const live = !call.ended_at;
   const seconds = (live ? now : call.ended_at) - call.started_at;
   const state = STATE_LABELS[call.state] ?? call.state ?? "—";
+  const score = parseScoreJson(call.score_json);
+  const turnCount = score?.turn_count ?? 0;
+  const hasScore = typeof call.score_overall === "number";
+  const alert = live && turnCount >= 2 && hasScore && call.score_overall < 40;
 
   return (
     <a
       href={`#/call/${call.call_id}`}
-      className={`block rounded-xl border bg-slate-900/70 p-4 transition-colors hover:border-slate-600 ${
-        live ? "border-slate-700" : "border-slate-800 opacity-60"
+      className={`block rounded-xl border p-4 transition-colors hover:border-slate-600 ${
+        alert
+          ? "border-rose-500 bg-rose-950/40 ring-1 ring-rose-500/50"
+          : `bg-slate-900/70 ${live ? "border-slate-700" : "border-slate-800 opacity-60"}`
       }`}
     >
       <div className="flex items-start gap-4">
@@ -84,13 +99,25 @@ function CallCard({ call, now, dense }) {
           <p className="truncate font-mono text-xs text-slate-500">
             {call.from_number ?? "número oculto"}
           </p>
-          <p className="mt-2 flex items-center gap-2 text-sm">
+          <p className="mt-2 flex flex-wrap items-center gap-2 text-sm">
             <span
               className={`inline-block h-2 w-2 rounded-full ${
                 live ? "animate-pulse bg-emerald-400" : "bg-slate-600"
               }`}
             />
             <span className="text-slate-300">{state}</span>
+            {alert ? (
+              <span className="inline-flex animate-pulse items-center gap-1 rounded-full border border-rose-500/60 bg-rose-500/20 px-2 py-0.5 font-mono text-xs font-medium text-rose-300">
+                ALERTA · SCORE {Math.round(call.score_overall)}
+              </span>
+            ) : (
+              live &&
+              hasScore && (
+                <span className="inline-flex items-center rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs tabular-nums text-slate-300">
+                  Score {Math.round(call.score_overall)}
+                </span>
+              )
+            )}
           </p>
         </div>
       </div>

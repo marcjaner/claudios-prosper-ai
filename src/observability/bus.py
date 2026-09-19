@@ -38,6 +38,7 @@ class EventBus:
         self._store = store
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
         self._subscribers: set[asyncio.Queue] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self.dropped = 0
 
     def emit(self, call_id: str, kind: str, payload: dict | None = None) -> None:
@@ -47,6 +48,17 @@ class EventBus:
         self._put(CallUpdate(call_id, fields))
 
     def _put(self, item: Event | CallUpdate) -> None:
+        if self._loop is not None:
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+            if running_loop is not self._loop:
+                self._loop.call_soon_threadsafe(self._put_nowait, item)
+                return
+        self._put_nowait(item)
+
+    def _put_nowait(self, item: Event | CallUpdate) -> None:
         try:
             self._queue.put_nowait(item)
         except asyncio.QueueFull:
@@ -62,6 +74,7 @@ class EventBus:
             self._subscribers.discard(queue)
 
     async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         while True:
             batch = [await self._queue.get()]
             while len(batch) < BATCH_MAX:

@@ -22,6 +22,12 @@ class FakeRepository:
     async def memory_for_call(self, _call_id):
         return ""
 
+    async def workflow_for_call(self, _call_id):
+        return {}
+
+    async def save_workflow(self, _call_id, _state):
+        return None
+
     async def record_submission(self, *_args):
         return None
 
@@ -101,7 +107,7 @@ def test_clinic_tool_does_not_block_event_loop(monkeypatch):
 
     tools = {
         "search_patients": Tool(
-            name="search_patients", parameters={"type": "object"}, execute=slow_tool
+            name="search_patients", parameters={}, execute=slow_tool
         )
     }
     monkeypatch.setattr(agent, "load_tools", lambda _functions: tools)

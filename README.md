@@ -20,14 +20,17 @@ The smoke test requires `ffmpeg` on `PATH`.
 
 Configure `PLATFORM_API_KEY`, `PLATFORM_API_BASE_URL`, `HELMCODE_API_KEY`,
 `DEEPGRAM_API_KEY`, and the selected TTS provider in `.env`, then start the
-full voice pipeline:
+full voice pipeline. `TYPESAFE_API_KEY` is optional and enables historical
+conversation scoring; `TYPESAFE_DEFAULT_MODEL` defaults to `jev-latest`:
 
 ```shell
 PYTHONPATH=src uv run python -m agent
 ```
 
 Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
-with Prosper clinic tools, and TTS.
+with the Prosper clinic tools, and TTS. Once the server is up, the call
+tester is at [http://localhost:7860](http://localhost:7860) and the
+observability console at [http://localhost:7860/app](http://localhost:7860/app).
 
 ## Twilio transport
 
