@@ -1,4 +1,4 @@
-"""OpenRouter-compatible completion client (bare ``openai`` SDK)."""
+"""OpenAI-compatible completion client using the bare ``openai`` SDK."""
 
 from __future__ import annotations
 
@@ -19,6 +19,39 @@ from agent.utils import load_environment
 _logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_HELMCODE_BASE_URL = "https://api.helmcode.com/v1"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+
+def _environment_config() -> tuple[str | None, str, str, str | None]:
+    load_environment()
+    helmcode_api_key = os.getenv("HELMCODE_API_KEY")
+    if helmcode_api_key:
+        return (
+            helmcode_api_key,
+            os.getenv("HELMCODE_BASE_URL") or DEFAULT_HELMCODE_BASE_URL,
+            os.getenv("HELMCODE_MODEL") or DEFAULT_MODEL,
+            None,
+        )
+
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        return (
+            None,
+            os.getenv("HELMCODE_BASE_URL") or DEFAULT_HELMCODE_BASE_URL,
+            os.getenv("HELMCODE_MODEL") or DEFAULT_MODEL,
+            None,
+        )
+
+    openai_model = os.getenv("OPENAI_MODEL")
+    if not openai_model:
+        raise RuntimeError("Set OPENAI_MODEL in .env before calling OpenAI.")
+    return (
+        openai_api_key,
+        os.getenv("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL,
+        openai_model or DEFAULT_MODEL,
+        os.getenv("OPENAI_REASONING_EFFORT") or None,
+    )
 
 
 @dataclass(frozen=True)
@@ -78,6 +111,7 @@ class LLMClient:
         api_key: str | None = None,
         base_url: str | None = None,
         default_temperature: float = 0.0,
+        default_reasoning_effort: str | None = None,
         default_max_tokens: int = 4096,
         max_retries: int = 2,
     ) -> None:
@@ -86,6 +120,7 @@ class LLMClient:
         self._api_key = api_key
         self._base_url = base_url
         self.default_temperature = default_temperature
+        self.default_reasoning_effort = default_reasoning_effort
         self.default_max_tokens = default_max_tokens
         self.max_retries = max_retries
         self._clients: dict[tuple[str, str | None], OpenAI] = {}
@@ -97,14 +132,14 @@ class LLMClient:
             _logger.debug("Reusing cached LLM client for model=%s", model_id)
             return cached
 
-        load_environment()
-        api_key = self._api_key or os.getenv("HELMCODE_API_KEY")
+        environment_api_key, environment_base_url, _, _ = _environment_config()
+        api_key = self._api_key or environment_api_key
         if not api_key or api_key == "your-helmcode-api-key":
-            raise RuntimeError("Set HELMCODE_API_KEY in .env before calling Helmcode.")
+            raise RuntimeError(
+                "Set HELMCODE_API_KEY or OPENAI_API_KEY in .env before calling the LLM."
+            )
 
-        base_url = self._base_url or os.getenv(
-            "HELMCODE_BASE_URL", "https://api.helmcode.com/v1"
-        )
+        base_url = self._base_url or environment_base_url
         _logger.info("Creating LLM client model=%s base_url=%s", model_id, base_url)
         client = OpenAI(
             api_key=api_key,
@@ -176,19 +211,25 @@ class LLMClient:
         model: str,
         temperature: float | None,
         max_tokens: int | None,
+        reasoning_effort: str | None,
     ) -> dict[str, object]:
         """Core kwargs shared by both completion methods."""
-        return {
+        kwargs: dict[str, object] = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": (
-                self.default_temperature if temperature is None else temperature
-            ),
             # SDK deprecates ``max_tokens`` in favour of ``max_completion_tokens``.
             "max_completion_tokens": (
                 self.default_max_tokens if max_tokens is None else max_tokens
             ),
         }
+        resolved_reasoning_effort = reasoning_effort or self.default_reasoning_effort
+        if resolved_reasoning_effort:
+            kwargs["reasoning_effort"] = resolved_reasoning_effort
+        else:
+            kwargs["temperature"] = (
+                self.default_temperature if temperature is None else temperature
+            )
+        return kwargs
 
     def _create_chat_completion(
         self,
@@ -236,6 +277,7 @@ class LLMClient:
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         extra_body: dict[str, object] | None = None,
     ) -> Completion:
         """Run a plain completion and return its text and verified citation URLs."""
@@ -244,7 +286,7 @@ class LLMClient:
         # Build kwargs and splat: the dict shape is dynamic (tools/extra_body are
         # optional), so we pass it as Any — the SDK validates at runtime.
         kwargs: Any = self._common_create_kwargs(
-            prompt, resolved_model, temperature, max_tokens
+            prompt, resolved_model, temperature, max_tokens, reasoning_effort
         )
         if extra_body:
             kwargs["extra_body"] = extra_body
@@ -266,6 +308,7 @@ class LLMClient:
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         extra_body: dict[str, object] | None = None,
     ) -> StructuredCompletion[T]:
         """Run a completion parsed into a Pydantic schema via ``json_schema``."""
@@ -273,7 +316,7 @@ class LLMClient:
         resolved_model = model or self.default_model
         # Same dynamic-shape splat as complete(); see the note there.
         kwargs: Any = self._common_create_kwargs(
-            prompt, resolved_model, temperature, max_tokens
+            prompt, resolved_model, temperature, max_tokens, reasoning_effort
         )
         if extra_body:
             kwargs["extra_body"] = extra_body
@@ -310,12 +353,13 @@ class LLMClient:
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> ToolCompletion:
         """Run a completion and return native function calls from the message."""
         resolved_model = model or self.default_model
         client = self._get_client(resolved_model)
         kwargs: Any = self._common_create_kwargs(
-            prompt, resolved_model, temperature, max_tokens
+            prompt, resolved_model, temperature, max_tokens, reasoning_effort
         )
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
@@ -347,4 +391,10 @@ class LLMClient:
 @lru_cache(maxsize=1)
 def get_llm_client() -> LLMClient:
     """Return the shared default client for the process."""
-    return LLMClient(os.getenv("HELMCODE_MODEL", DEFAULT_MODEL))
+    api_key, base_url, model, reasoning_effort = _environment_config()
+    return LLMClient(
+        model,
+        api_key=api_key,
+        base_url=base_url,
+        default_reasoning_effort=reasoning_effort,
+    )
