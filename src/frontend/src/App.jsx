@@ -61,7 +61,7 @@ export default function App() {
   const activeView = openCall ? returnTo : view;
 
   return (
-    <div className={`min-h-screen ${clinicTheme ? "clinic-theme bg-[#eef3f1] text-slate-900" : "bg-slate-950 text-slate-200"}`}>
+    <div className={`min-h-screen ${openCall ? "xl:flex xl:h-dvh xl:min-h-0 xl:flex-col xl:overflow-hidden" : ""} ${clinicTheme ? "clinic-theme bg-[#eef3f1] text-slate-900" : "bg-slate-950 text-slate-200"}`}>
       <header className={clinicTheme
         ? "grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-3 border-b border-slate-200/80 bg-white/90 px-5 py-4 sm:grid-cols-[1fr_auto_1fr] sm:px-8"
         : "flex items-center gap-6 border-b border-slate-800 px-6 py-4"
