@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import OutcomeHistogram from "./OutcomeHistogram.jsx";
-import { INSURERS, OUTCOMES, REASONS, outcomeStyle } from "./outcomes.js";
+import { historyDateRange, INSURERS, OUTCOMES, REASONS, outcomeStyle } from "./outcomes.js";
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -48,18 +48,31 @@ export default function History() {
   const [calls, setCalls] = useState([]);
   const [stats, setStats] = useState(null);
   const [histogram, setHistogram] = useState(null);
-  const [filters, setFilters] = useState({
+  const [range, setRange] = useState("7");
+  const [filters, setFilters] = useState(() => ({
     q: "",
     outcome: "",
     reason: "",
     name: "",
     insurer: "",
-    date_from: "",
-    date_to: "",
-  });
+    ...historyDateRange("7"),
+  }));
   const [query, setQuery] = useState("");
   const [nameQuery, setNameQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  function changeRange(value) {
+    setRange(value);
+    if (value !== "custom") {
+      setFilters((previous) => ({ ...previous, ...historyDateRange(value) }));
+    }
+  }
+
+  function changeDate(key, value) {
+    setRange("custom");
+    setFilters((previous) => ({ ...previous, [key]: value }));
+  }
 
   useEffect(() => {
     const timer = setTimeout(
@@ -78,18 +91,35 @@ export default function History() {
     ]);
     let stale = false;
     setLoading(true);
+    setError(null);
+    setHistogram(null);
+    if (filters.date_from && filters.date_to && filters.date_from > filters.date_to) {
+      setError("Start date must be on or before end date.");
+      setCalls([]);
+      setLoading(false);
+      return;
+    }
+    const load = (url) => fetch(url).then((response) => {
+      if (!response.ok) throw new Error("Could not load call history. Please try again.");
+      return response.json();
+    });
     Promise.all([
-      fetch(`/api/calls?${params}`).then((r) => r.json()),
-      fetch("/api/stats").then((r) => r.json()),
+      load(`/api/calls?${params}`),
+      load("/api/stats"),
       // The histogram reads the same filters, so the picture and the table
       // can never disagree about what is being looked at.
-      fetch(`/api/histogram?${params}`).then((r) => r.json()),
+      load(`/api/histogram?${params}`),
     ])
       .then(([callsBody, statsBody, histogramBody]) => {
         if (stale) return;
         setCalls(callsBody.calls);
         setStats(statsBody);
         setHistogram(histogramBody);
+      })
+      .catch(() => {
+        if (stale) return;
+        setCalls([]);
+        setError("Could not load call history. Please try again.");
       })
       .finally(() => !stale && setLoading(false));
     return () => {
@@ -134,9 +164,10 @@ export default function History() {
               hint={stats.calls ? `${Math.round((stats.failed / stats.calls) * 100)}%` : ""}
             />
           </div>
-          <OutcomeHistogram histogram={histogram} />
         </>
       )}
+
+      <OutcomeHistogram histogram={histogram} range={range} onRangeChange={changeRange} loading={loading} error={error} />
 
       <section aria-label="History filters" className="clinic-panel flex flex-wrap gap-2 p-3">
         <input
@@ -184,9 +215,8 @@ export default function History() {
           <input
             type="date"
             value={filters.date_from}
-            onChange={(event) =>
-              setFilters((previous) => ({ ...previous, date_from: event.target.value }))
-            }
+            max={filters.date_to || undefined}
+            onChange={(event) => changeDate("date_from", event.target.value)}
             className="bg-transparent text-slate-700 focus:outline-none"
           />
         </label>
@@ -195,9 +225,8 @@ export default function History() {
           <input
             type="date"
             value={filters.date_to}
-            onChange={(event) =>
-              setFilters((previous) => ({ ...previous, date_to: event.target.value }))
-            }
+            min={filters.date_from || undefined}
+            onChange={(event) => changeDate("date_to", event.target.value)}
             className="bg-transparent text-slate-700 focus:outline-none"
           />
         </label>
@@ -220,6 +249,7 @@ export default function History() {
             onClick={() => {
               setQuery("");
               setNameQuery("");
+              setRange("all");
               setFilters({
                 q: "",
                 outcome: "",

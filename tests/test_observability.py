@@ -427,3 +427,102 @@ def test_histogram_honours_the_same_filters_as_the_table(store):
     )
     only = store.histogram(insurer="sanitas")["buckets"]
     assert sum(b["wrote"] for b in only) == 1
+
+
+def test_histogram_splits_each_call_by_recorded_action(store):
+    base = datetime(2026, 9, 19, 10, tzinfo=CLINIC_TIMEZONE).timestamp()
+    outcomes = [
+        "BOOK",
+        "RESCHEDULE",
+        "CANCEL",
+        "REGISTER",
+        "ESCALATE",
+        "NO_ACTION",
+        None,
+        "UNKNOWN",
+    ]
+    store.write(
+        [
+            CallUpdate(
+                str(index),
+                {"started_at": base, "ended_at": base + 1, "outcome": outcome},
+            )
+            for index, outcome in enumerate(outcomes)
+        ]
+    )
+    bucket = store.histogram()["buckets"][0]
+    assert bucket["total"] == len(outcomes)
+    assert bucket["absent"] == 2
+    assert bucket["outcomes"] == {outcome: 1 for outcome in outcomes[:6]}
+    assert sum(bucket["outcomes"].values()) + bucket["absent"] == bucket["total"]
+
+
+def test_histogram_includes_empty_days_in_selected_range(store):
+    base = datetime(2026, 9, 19, 23, 30, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                "LATE", {"started_at": base, "ended_at": base + 1, "outcome": "BOOK"}
+            )
+        ]
+    )
+    histogram = store.histogram(date_from="2026-09-13", date_to="2026-09-19")
+    assert histogram["bucket_seconds"] == 86400
+    assert len(histogram["buckets"]) == 7
+    assert [b["total"] for b in histogram["buckets"]] == [0, 0, 0, 0, 0, 0, 1]
+    for index, bucket in enumerate(histogram["buckets"]):
+        local = datetime.fromtimestamp(bucket["bucket"], CLINIC_TIMEZONE)
+        assert local.day == 13 + index
+        assert local.hour == 0
+
+
+def test_histogram_empty_range_keeps_axis(store):
+    histogram = store.histogram(date_from="2026-09-13", date_to="2026-09-19")
+    assert len(histogram["buckets"]) == 7
+    assert all(b["total"] == 0 for b in histogram["buckets"])
+    assert store.histogram()["buckets"] == []
+
+
+def test_histogram_daily_buckets_follow_daylight_saving_time(store):
+    late = datetime(2026, 10, 25, 23, 30, tzinfo=CLINIC_TIMEZONE).timestamp()
+    after = datetime(2026, 10, 26, 0, 30, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate("LATE", {"started_at": late, "ended_at": late + 1}),
+            CallUpdate("AFTER", {"started_at": after, "ended_at": after + 1}),
+        ]
+    )
+    histogram = store.histogram(date_from="2026-10-24", date_to="2026-10-25")
+    assert [b["total"] for b in histogram["buckets"]] == [0, 1]
+    assert [c["call_id"] for c in store.list_calls(date_to="2026-10-25")] == ["LATE"]
+
+
+def test_histogram_filtered_totals_match_table(store):
+    base = datetime(2026, 9, 19, 10, tzinfo=CLINIC_TIMEZONE).timestamp()
+    store.write(
+        [
+            CallUpdate(
+                "DONE",
+                {
+                    "started_at": base,
+                    "ended_at": base + 1,
+                    "outcome": "CANCEL",
+                    "insurer": "sanitas",
+                },
+            ),
+            CallUpdate("LIVE", {"started_at": base, "insurer": "sanitas"}),
+            CallUpdate(
+                "OTHER",
+                {"started_at": base, "ended_at": base + 1, "insurer": "adeslas"},
+            ),
+        ]
+    )
+    filters = {
+        "date_from": "2026-09-13",
+        "date_to": "2026-09-19",
+        "ended_only": True,
+        "insurer": "sanitas",
+    }
+    buckets = store.histogram(**filters)["buckets"]
+    assert sum(b["total"] for b in buckets) == len(store.list_calls(**filters)) == 1
+    assert sum(b["outcomes"]["CANCEL"] for b in buckets) == 1
