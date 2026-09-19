@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import StageTrace from "./StageTrace.jsx";
 import Transcript from "./Transcript.jsx";
 import { outcomeStyle } from "./outcomes.js";
 
@@ -127,6 +128,7 @@ export default function CallDetail({ callId, liveCall, liveEvents }) {
         </aside>
 
         <section className="space-y-4">
+          <StageTrace events={events} startedAt={call.started_at} />
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="mb-3 text-xs uppercase tracking-wide text-slate-500">
               Transcripción y traza
