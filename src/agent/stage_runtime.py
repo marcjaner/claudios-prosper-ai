@@ -79,10 +79,16 @@ class CallGraph:
     history: list[HistoryEntry] = field(default_factory=list)
     turn: int = 0
     failed_tools: set[str] = field(default_factory=set)
+    calls_made: set[str] = field(default_factory=set)
 
     def start_turn(self) -> None:
         self.turn += 1
         self.failed_tools.clear()
+        self.calls_made.clear()
+
+    @staticmethod
+    def signature(name: str, arguments: dict[str, Any]) -> str:
+        return f"{name}:{sorted(arguments.items(), key=lambda item: item[0])}"
 
     @classmethod
     def start(cls, graph: Graph | None = None) -> CallGraph:
@@ -111,6 +117,10 @@ class CallGraph:
             # A request that failed may still have been received. Repeating it could
             # book the same patient twice, so the caller decides what happens next.
             return f"{name} already failed once this turn and must not be retried"
+        if self.signature(name, arguments) in self.calls_made:
+            # The answer is already in the conversation, and repeating it would
+            # spend the turn's budget saying nothing new.
+            return f"{name} was already called with these arguments this turn"
         return ""
 
     def _refuse_transition(self, target: str) -> str:

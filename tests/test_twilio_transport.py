@@ -1,15 +1,47 @@
 import asyncio
 import json
 import wave
+from typing import cast
 
 import numpy as np
 import uvicorn
 from fake_harness import place_call, synthesize_caller_audio
+from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.pipeline.worker import PipelineWorker
 
 from twilio.echo import build_echo_agent
 from twilio.server import create_app
+from twilio.transport import register_initial_greeting
 
 ONE_SECOND_OF_SAMPLES = 8_000
+
+
+class GreetingWorker:
+    def __init__(self):
+        self.handlers = {}
+        self.frames = []
+
+    def event_handler(self, name):
+        def register(handler):
+            self.handlers[name] = handler
+            return handler
+
+        return register
+
+    async def queue_frame(self, frame):
+        self.frames.append(frame)
+
+
+def test_initial_greeting_is_queued_after_pipeline_starts():
+    worker = GreetingWorker()
+    register_initial_greeting(cast(PipelineWorker, worker), "Clínica Arenal")
+
+    asyncio.run(worker.handlers["on_pipeline_started"](worker, None))
+
+    assert len(worker.frames) == 1
+    assert isinstance(worker.frames[0], TTSSpeakFrame)
+    assert worker.frames[0].text == "Clínica Arenal"
+    assert worker.frames[0].append_to_context is False
 
 
 class BackgroundServer:

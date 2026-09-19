@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -104,7 +105,9 @@ async def _observed_tool_completion(
     started_ns = time.perf_counter_ns()
     await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=model))
     try:
-        completion = client.complete_with_tools(prompt, tool_definitions)
+        completion = await asyncio.to_thread(
+            client.complete_with_tools, prompt, tool_definitions
+        )
     except Exception as exc:
         await _emit(
             event_sink,
@@ -138,7 +141,6 @@ async def _observed_tool_completion(
 async def _observed_completion(
     prompt: str,
     client: LLMClient,
-    tools: dict[str, dict[str, Any]],
     event_sink: EventSink | None,
 ) -> AgentResponse:
     request_id = uuid4().hex
@@ -146,10 +148,8 @@ async def _observed_completion(
     started_ns = time.perf_counter_ns()
     await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=model))
     try:
-        completion = client.complete_structured(
-            _completion_prompt(prompt),
-            AgentResponse,
-            extra_body={"tools": [tool["definition"] for tool in tools.values()]},
+        completion = await asyncio.to_thread(
+            client.complete_structured, prompt, AgentResponse
         )
     except Exception as exc:
         await _emit(
@@ -282,7 +282,7 @@ async def run_agent_turn(
         raise
     finally:
         emit(call_id, "turn_finished", {"turn": state.turn, "stage": state.stage_id, "ending": ending})
-        api.close()
+        await asyncio.to_thread(api.close)
 
 
 def _graph_prompt(state: CallGraph) -> str:
@@ -350,6 +350,7 @@ def _plan_batch(completion: ToolCompletion, state: CallGraph, call_id: str, step
                     "key": key, "value": value,
                 })
         else:
+            state.calls_made.add(state.signature(call.name, call.arguments))
             batch.business.append(call)
 
     for index, call in enumerate(transitions):
@@ -428,7 +429,7 @@ async def _run_tool(
     )
     tool = tools[call.name]
     try:
-        output = tool["execute"](**call.arguments)
+        output = await asyncio.to_thread(tool["execute"], **call.arguments)
     except Exception as exc:  # noqa: BLE001 - a failed lookup is feedback, not the end of the turn
         await _emit_tool_error(
             event_sink, call.name, tool_call_id, started_ns, type(exc).__name__,
@@ -467,43 +468,14 @@ async def _final_answer(
     state: CallGraph, client: LLMClient, event_sink: EventSink | None
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
-    request_id = uuid4().hex
-    started_ns = time.perf_counter_ns()
-    await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=client.default_model))
-    try:
-        completion = client.complete(
-            f"{_graph_prompt(state)}\n\n"
-            "Answer the caller now using only what is above. Be concise, never mention "
-            "internal tools or stages, and do not promise anything you have not already done."
-        )
-    except Exception as exc:
-        await _emit(
-            event_sink,
-            LLMRequestFailedFrame(
-                request_id=request_id,
-                model=client.default_model,
-                duration_ms=_duration_ms(started_ns),
-                error_type=type(exc).__name__,
-                error_message="LLM request failed",
-            ),
-        )
-        raise
-
-    usage = completion.usage
-    await _emit(
+    response = await _observed_completion(
+        f"{_graph_prompt(state)}\n\n"
+        "Answer the caller now using only what is above. Be concise, never mention "
+        "internal tools or stages, and do not promise anything you have not already done.",
+        client,
         event_sink,
-        LLMResponseFinishedFrame(
-            request_id=request_id,
-            model=client.default_model,
-            duration_ms=_duration_ms(started_ns),
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            total_tokens=usage.total_tokens,
-            reasoning_tokens=usage.reasoning_tokens,
-            cached_tokens=usage.cached_tokens,
-        ),
     )
-    return completion.text.strip()
+    return response.immediate_answer.strip()
 
 
 async def _emit(event_sink: EventSink | None, frame: SystemFrame) -> None:

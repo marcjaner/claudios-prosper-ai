@@ -44,11 +44,14 @@ class FakeClient:
         self.offered.append([tool["function"]["name"] for tool in tool_definitions])
         return self.completions.pop(0)
 
-    def complete(self, prompt, **_):
+    def complete_structured(self, prompt, _schema, **_):
         self.prompts.append(prompt)
-        from agent.llm import Completion
+        from agent.llm import StructuredCompletion
+        from agent.models import AgentResponse
 
-        return Completion(text="All set.", sources=[], usage=Usage())
+        return StructuredCompletion(
+            data=AgentResponse(immediate_answer="All set."), usage=Usage()
+        )
 
 
 def says(text, *calls):
@@ -352,3 +355,16 @@ def test_a_silent_step_still_answers_the_caller():
                       {"search_patients": {"patients": [{"id": "P1"}]}})
 
     assert spoken == ["One moment.", "All set."]
+
+
+def test_an_identical_call_is_not_repeated_within_a_turn():
+    """A model that keeps asking the same question would spend the whole budget."""
+    state = two_stage_state()
+    client = FakeClient(*[
+        says("Un momento.", ("search_patients", {"name": "Ana"})) for _ in range(4)
+    ])
+
+    spoken = run_turn("Soy Ana", state, client, FakeRepository(),
+                      {"search_patients": {"patients": []}})
+
+    assert spoken == ["Un momento.", "All set."]
