@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import Builder from "./Builder.jsx";
 import CallDetail from "./CallDetail.jsx";
+import DemoCall from "./DemoCall.jsx";
 import History from "./History.jsx";
 import Sparkline from "./Sparkline.jsx";
 import Wall from "./Wall.jsx";
@@ -114,6 +115,7 @@ export default function App() {
           ))}
         </nav>
         <div className={`flex items-center ${clinicTheme ? "justify-self-end gap-3" : "ml-auto gap-6"}`}>
+          <DemoCall dark={!clinicTheme} />
           {!clinicTheme && <Sparkline history={history} />}
           <div className="text-right">
             <p className={`${clinicTheme ? "text-xl font-semibold text-emerald-600" : "font-mono text-3xl text-emerald-400"} tabular-nums`}>{live.length}</p>
