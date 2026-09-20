@@ -56,4 +56,14 @@ echo "Backend:  http://localhost:7860/"
 echo "Press Ctrl+C to stop both servers."
 echo
 
-wait -n "$BACKEND_PID" "$FRONTEND_PID"
+while true; do
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    wait "$BACKEND_PID"
+    exit $?
+  fi
+  if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    wait "$FRONTEND_PID"
+    exit $?
+  fi
+  sleep 1
+done
