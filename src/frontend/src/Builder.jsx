@@ -26,31 +26,31 @@ const nextEdgeId = () => `edge_${(edgeSequence += 1)}`;
 function StageNode({ id, data, selected }) {
   return (
     <div
-      className={`min-w-44 rounded-lg border px-3 py-2 text-left ${
-        selected ? "border-emerald-400 bg-slate-800" : "border-slate-700 bg-slate-900"
+      className={`min-w-44 rounded-xl border bg-white px-3 py-2 text-left shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${
+        selected ? "border-emerald-400 ring-1 ring-emerald-200" : "border-slate-200"
       }`}
     >
-      <Handle type="target" position={Position.Left} className="!bg-slate-500" />
+      <Handle type="target" position={Position.Left} className="!bg-emerald-500" />
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-slate-100">{id}</span>
+        <span className="text-sm font-medium text-slate-900">{id}</span>
         {data.isEntry && (
-          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] uppercase text-emerald-400">
+          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
             entrada
           </span>
         )}
       </div>
       {data.tools.length === 0 ? (
-        <p className="mt-1 text-[11px] text-slate-600">sin herramientas</p>
+        <p className="mt-1 text-[11px] text-slate-400">sin herramientas</p>
       ) : (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {data.tools.map((tool) => (
-            <span key={tool} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+            <span key={tool} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
               {tool}
             </span>
           ))}
         </div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-slate-500" />
+      <Handle type="source" position={Position.Right} className="!bg-emerald-500" />
     </div>
   );
 }
@@ -68,7 +68,7 @@ function KeyList({ value, draft, setDraft, onCommit, placeholder }) {
       }}
       onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
       placeholder={placeholder}
-      className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 p-2 font-mono text-sm text-slate-200"
+      className="clinic-control mt-1 w-full font-mono"
     />
   );
 }
@@ -93,9 +93,9 @@ const toFlowEdges = (graph) =>
     target: edge.to,
     label: (edge.requires ?? []).join(", ") || "sin requisitos",
     data: { requires: edge.requires ?? [] },
-    labelStyle: { fill: "#94a3b8", fontSize: 11 },
-    labelBgStyle: { fill: "#0f172a" },
-    style: { stroke: "#475569" },
+    labelStyle: { fill: "#475569", fontSize: 11 },
+    labelBgStyle: { fill: "#ffffff" },
+    style: { stroke: "#94a3b8" },
   }));
 
 export default function Builder() {
@@ -132,9 +132,9 @@ export default function Builder() {
             id: nextEdgeId(),
             label: "sin requisitos",
             data: { requires: [] },
-            labelStyle: { fill: "#94a3b8", fontSize: 11 },
-            labelBgStyle: { fill: "#0f172a" },
-            style: { stroke: "#475569" },
+            labelStyle: { fill: "#475569", fontSize: 11 },
+            labelBgStyle: { fill: "#ffffff" },
+            style: { stroke: "#94a3b8" },
           },
           current,
         ),
@@ -241,31 +241,31 @@ export default function Builder() {
   const edge = selected?.kind === "edge" ? edges.find((item) => item.id === selected.id) : null;
 
   return (
-    <div className="flex h-[calc(100vh-73px)]">
+    <div className="flex h-[calc(100vh-77px)]">
       <div className="relative flex-1">
         <div className="absolute left-4 top-4 z-10 flex items-center gap-2">
           <button
             onClick={addStage}
-            className="rounded-md bg-slate-800 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700"
+            className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-slate-300"
           >
             Añadir etapa
           </button>
           <button
             onClick={removeSelected}
             disabled={!selected}
-            className="rounded-md bg-slate-800 px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-700 disabled:opacity-40"
+            className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition-colors hover:border-slate-300 disabled:opacity-40"
           >
             Eliminar
           </button>
           <button
             onClick={save}
-            className="rounded-md bg-emerald-500/15 px-3 py-1.5 text-sm text-emerald-400 hover:bg-emerald-500/25"
+            className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700"
           >
             Guardar
           </button>
           {status && (
             <span
-              className={`text-xs ${status === "guardado" ? "text-emerald-400" : "text-rose-400"}`}
+              className={`text-xs font-medium ${status === "guardado" ? "text-emerald-600" : "text-rose-600"}`}
             >
               {status}
             </span>
@@ -289,18 +289,18 @@ export default function Builder() {
           }}
           onPaneClick={() => setSelected(null)}
           fitView
-          colorMode="dark"
+          colorMode="light"
         >
-          <Background color="#1e293b" />
+          <Background color="#cbd5e1" />
           <Controls />
         </ReactFlow>
       </div>
 
-      <aside className="w-96 overflow-y-auto border-l border-slate-800 bg-slate-950 p-4">
+      <aside className="w-96 overflow-y-auto border-l border-slate-200 bg-white p-5">
         {!selected && (
           <div className="space-y-4">
             <label className="block">
-              <span className="text-xs uppercase tracking-wide text-slate-500">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Instrucciones generales
               </span>
               <textarea
@@ -309,14 +309,14 @@ export default function Builder() {
                 onChange={(event) => setSystem(event.target.value)}
                 rows={18}
                 placeholder="Cómo habla el agente, qué puede afirmar y de dónde salen los identificadores."
-                className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 p-2 text-sm text-slate-200"
+                className="clinic-control mt-1 w-full"
               />
-              <span className="mt-1 block text-[11px] text-slate-600">
+              <span className="mt-1 block text-[11px] text-slate-400">
                 Va delante de las instrucciones de cada etapa, en todas las llamadas. Las etapas
                 dicen qué hacer y cuándo; esto dice cómo.
               </span>
             </label>
-            <p className="border-t border-slate-800 pt-4 text-sm text-slate-500">
+            <p className="border-t border-slate-200 pt-4 text-sm text-slate-500">
               Selecciona una etapa o una transición para editarla. Arrastra de un conector a otro
               para crear una transición.
             </p>
@@ -331,12 +331,12 @@ export default function Builder() {
                 onChange={(event) => setDraftId(event.target.value)}
                 onBlur={(event) => renameStage(node.id, event.target.value)}
                 onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
-                className="min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-sm text-slate-100"
+                className="clinic-control min-w-0 flex-1 font-mono text-slate-900"
               />
               {entry !== node.id && (
                 <button
                   onClick={() => makeEntry(node.id)}
-                  className="text-xs text-slate-500 hover:text-emerald-400"
+                  className="shrink-0 text-xs font-medium text-slate-500 hover:text-emerald-600"
                 >
                   marcar como entrada
                 </button>
@@ -344,20 +344,20 @@ export default function Builder() {
             </div>
 
             <label className="block">
-              <span className="text-xs uppercase tracking-wide text-slate-500">Instrucciones</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Instrucciones</span>
               <textarea
                 value={node.data.prompt}
                 onChange={(event) => patchNode(node.id, { prompt: event.target.value })}
                 rows={8}
-                className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 p-2 text-sm text-slate-200"
+                className="clinic-control mt-1 w-full"
               />
             </label>
 
             <div>
-              <span className="text-xs uppercase tracking-wide text-slate-500">Herramientas</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Herramientas</span>
               <div className="mt-1 space-y-1">
                 {tools.map((tool) => (
-                  <label key={tool.name} className="flex items-start gap-2 text-sm text-slate-300">
+                  <label key={tool.name} className="flex items-start gap-2 text-sm text-slate-700">
                     <input
                       type="checkbox"
                       checked={node.data.tools.includes(tool.name)}
@@ -368,11 +368,11 @@ export default function Builder() {
                             : node.data.tools.filter((name) => name !== tool.name),
                         })
                       }
-                      className="mt-1"
+                      className="mt-1 accent-emerald-600"
                     />
                     <span>
-                      <span className="font-mono text-xs">{tool.name}</span>
-                      <span className="block text-[11px] text-slate-600">{tool.description}</span>
+                      <span className="font-mono text-xs text-slate-700">{tool.name}</span>
+                      <span className="block text-[11px] text-slate-400">{tool.description}</span>
                     </span>
                   </label>
                 ))}
@@ -380,7 +380,7 @@ export default function Builder() {
             </div>
 
             <label className="block">
-              <span className="text-xs uppercase tracking-wide text-slate-500">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Olvida al entrar
               </span>
               <KeyList
@@ -396,11 +396,11 @@ export default function Builder() {
 
         {edge && (
           <div className="space-y-4">
-            <h2 className="font-medium text-slate-200">
-              {edge.source} <span className="text-slate-600">→</span> {edge.target}
+            <h2 className="font-medium text-slate-900">
+              {edge.source} <span className="text-slate-400">→</span> {edge.target}
             </h2>
             <label className="block">
-              <span className="text-xs uppercase tracking-wide text-slate-500">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Datos necesarios
               </span>
               <KeyList
@@ -410,7 +410,7 @@ export default function Builder() {
                 onCommit={(keys) => patchEdge(edge.id, keys)}
                 placeholder="p. ej. patient_id"
               />
-              <span className="mt-1 block text-[11px] text-slate-600">
+              <span className="mt-1 block text-[11px] text-slate-400">
                 El agente no puede pasar a {edge.target} hasta que haya registrado estos datos.
               </span>
             </label>
