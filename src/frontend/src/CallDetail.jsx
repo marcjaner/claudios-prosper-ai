@@ -5,6 +5,7 @@ import { StaffBadge } from "./History.jsx";
 import StageTrace from "./StageTrace.jsx";
 import Transcript from "./Transcript.jsx";
 import { getActionReason } from "./agentGraph.js";
+import { alertReason, needsAttention, parseScore } from "./alertReason.js";
 import { outcomeStyle } from "./outcomes.js";
 import { useOperatorLine } from "./useOperatorLine.js";
 
@@ -84,6 +85,44 @@ function TransferButton({ callId, heldElsewhere }) {
   );
 }
 
+function AttentionWarning({ callId, reason }) {
+  const [status, setStatus] = useState("idle");
+
+  const terminateCall = async () => {
+    setStatus("stopping");
+    try {
+      const response = await fetch(`/api/calls/${encodeURIComponent(callId)}/stop`, { method: "POST" });
+      if (!response.ok) throw new Error("stop failed");
+    } catch {
+      setStatus("error");
+    }
+  };
+
+  return (
+    <aside role="alert" className="flex shrink-0 flex-col gap-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 shadow-[0_1px_2px_rgba(120,53,15,0.04)] sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3">
+        <span aria-hidden="true" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-amber-100 text-lg font-bold text-amber-700">
+          !
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-amber-950">This call needs attention</p>
+          <p className="mt-0.5 text-sm leading-relaxed text-amber-900/80">
+            {status === "error" ? "The call could not be terminated. Please try again." : reason}
+          </p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={terminateCall}
+        disabled={status === "stopping"}
+        className="shrink-0 self-start rounded-full bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-rose-700 disabled:cursor-wait disabled:bg-rose-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600 sm:self-auto"
+      >
+        {status === "stopping" ? "Terminating…" : status === "error" ? "Retry termination" : "Terminate call"}
+      </button>
+    </aside>
+  );
+}
+
 export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   const [stored, setStored] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -119,6 +158,9 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
     ["stage_entered", "fact_recorded", "tool_rejected", "transition_rejected", "turn_finished"].includes(kind),
   );
   const style = call.outcome ? outcomeStyle(call.outcome) : null;
+  const score = parseScore(call.score_json);
+  const attention = live && call.state !== "operator" && needsAttention(call, score, live);
+  const attentionReason = attention ? alertReason(call, score) ?? "Clinic staff should review this call" : null;
 
   if (loading && !liveCall) {
     return <p className="clinic-page text-slate-500">Loading call…</p>;
@@ -152,9 +194,11 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
             </span>
           )}
           {call.reason && <span className="max-w-sm text-xs leading-relaxed text-slate-500">{getActionReason(call.reason)}</span>}
-          {call.guardrail_breached && <span className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800">Safety rule breached</span>}
+          {!live && call.guardrail_breached && <span className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800">Safety rule breached</span>}
         </div>
       </header>
+
+      {attention && <AttentionWarning key={callId} callId={callId} reason={attentionReason} />}
 
       <aside aria-label="Patient information" className="clinic-panel min-w-0 shrink-0 p-5">
         <div className="flex items-start justify-between gap-3">
