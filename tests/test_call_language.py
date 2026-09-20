@@ -1,155 +1,92 @@
-import asyncio
-
 import pytest
-from pipecat.frames.frames import (
-    TextFrame,
-    TranscriptionFrame,
-    TTSUpdateSettingsFrame,
-)
-from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.settings import TTSSettings
 from pipecat.transcriptions.language import Language
 
-from agent.language import (
-    DEFAULT_LANGUAGE,
-    CallLanguage,
-    LanguageTracker,
-    phrases,
-    reply_instruction,
-)
+from agent.language import DEFAULT_LANGUAGE, CallLanguage, phrases, reply_instruction
 from tts import language_settings
-
-
-def heard(language: Language | None) -> TranscriptionFrame:
-    return TranscriptionFrame("hello", "caller", "2026-09-19T10:00:00Z", language)
 
 
 def test_a_call_starts_in_english():
     assert CallLanguage().language == DEFAULT_LANGUAGE == Language.EN
 
 
-def test_one_stray_reading_does_not_move_the_call():
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Jorge Martínez",
+        "Montserrat González Martín",
+        "11 March 1940",
+        "V4656266J",
+        "Yes.",
+        "Okay.",
+        "María de la Cruz",
+        "My name is Jorge Martínez and I need an appointment.",
+        "I need a doctor who speaks Catalan, please.",
+        "I don't speak Spanish. Please speak English.",
+        "I don't speak Catalan",
+        "Please do not speak Spanish",
+    ],
+)
+def test_names_identifiers_and_provider_languages_do_not_switch_english(text):
     call = CallLanguage()
-
-    assert call.observe(Language.ES) is False
+    assert not call.observe_turn(text)
     assert call.language == Language.EN
 
 
-def test_two_agreeing_readings_move_the_call():
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Hola, quiero una cita con medicina general.", Language.ES),
+        ("Hola.", Language.ES),
+        ("Perdone, no la acabo de entender. La Clínica Arenal.", Language.ES),
+        ("Bon dia, voldria demanar hora amb un metge.", Language.CA),
+        ("Can we speak in Spanish please?", Language.ES),
+        ("Can we speak Spanish? I need a doctor.", Language.ES),
+        ("Podemos hablar en inglés?", Language.EN),
+        ("Could we switch to Catalan?", Language.CA),
+    ],
+)
+def test_complete_turn_follows_substantive_speech_or_explicit_request(text, expected):
     call = CallLanguage()
-
-    assert call.observe(Language.ES) is False
-    assert call.observe(Language.ES) is True
-    assert call.language == Language.ES
+    call.observe_turn(text)
+    assert call.language == expected
 
 
-def test_going_back_resets_the_run():
+def test_short_answers_preserve_the_selected_language():
     call = CallLanguage()
-    call.observe(Language.ES)
-    call.observe(Language.EN)
-
-    assert call.observe(Language.ES) is False
+    call.observe_turn("Hola, quiero una cita con medicina general.")
+    for text in (
+        "Sí.",
+        "Vale.",
+        "Jorge Martínez",
+        "13 diciembre 1995",
+        "Sí, el martes.",
+        "Sí, la de la tarde.",
+        "El día 23.",
+    ):
+        call.observe_turn(text)
+        assert call.language == Language.ES
+    assert call.observe_turn("Actually, can we speak English please?")
     assert call.language == Language.EN
 
 
-def test_disagreeing_readings_never_accumulate():
-    call = CallLanguage()
-
-    assert call.observe(Language.ES) is False
-    assert call.observe(Language.FR) is False
-    assert call.language == Language.EN
-
-
-def test_a_missing_reading_is_ignored():
-    call = CallLanguage()
-    call.observe(Language.ES)
-
-    assert call.observe(None) is False
-    assert call.observe(Language.ES) is True
-
-
-def test_a_regional_tag_is_the_same_call_language():
-    call = CallLanguage(Language.ES)
-
-    assert call.observe(Language.ES_ES) is False
-    assert call.language == Language.ES
-
-
-class CapturingTracker(LanguageTracker):
-    def __init__(self):
-        super().__init__("CA123", CallLanguage())
-        self.pushed = []
-
-    async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
-        self.pushed.append(frame)
-
-
-@pytest.fixture(autouse=True)
-def cartesia(monkeypatch):
-    """The tracker asks the configured provider how to follow a language."""
-    monkeypatch.setenv("TTS_PROVIDER", "cartesia")
-
-
-def run(tracker: LanguageTracker, frames) -> None:
-    async def drive():
-        for frame in frames:
-            await tracker.process_frame(frame, FrameDirection.DOWNSTREAM)
-
-    asyncio.run(drive())
-
-
-def test_the_voice_follows_the_caller():
-    tracker = CapturingTracker()
-
-    run(tracker, [heard(Language.ES), heard(Language.ES)])
-
-    updates = [f for f in tracker.pushed if isinstance(f, TTSUpdateSettingsFrame)]
-    assert len(updates) == 1
-    assert updates[0].delta.language == Language.ES
-
-
-def test_the_update_leads_the_transcript_that_earned_it():
-    """The same transcript can end the turn, and the reply must not beat it."""
-    tracker = CapturingTracker()
-    second = heard(Language.ES)
-
-    run(tracker, [heard(Language.ES), second])
-
-    kinds = [type(frame) for frame in tracker.pushed]
-    assert kinds.index(TTSUpdateSettingsFrame) < tracker.pushed.index(second)
-
-
-def test_the_voice_holds_until_the_readings_agree():
-    tracker = CapturingTracker()
-
-    run(tracker, [heard(Language.ES), heard(Language.EN), heard(Language.ES)])
-
-    assert not [f for f in tracker.pushed if isinstance(f, TTSUpdateSettingsFrame)]
-
-
-def test_every_frame_still_reaches_the_rest_of_the_pipeline():
-    tracker = CapturingTracker()
-    passing = TextFrame("not a transcript")
-
-    run(tracker, [passing])
-
-    assert passing in tracker.pushed
+def test_catalan_recovery_is_localized():
+    assert phrases(Language.CA).name == "Catalan"
+    assert phrases(Language.CA).no_answer != phrases(Language.EN).no_answer
+    assert reply_instruction(Language.CA) == "Reply to the caller in Catalan."
 
 
 def test_unwritten_languages_keep_the_clinics_filler_but_their_own_name():
     assert phrases(Language.FR) is phrases(DEFAULT_LANGUAGE)
     assert reply_instruction(Language.FR) == "Reply to the caller in fr."
-    assert reply_instruction(Language.EN) == "Reply to the caller in English."
 
 
 def test_deepgram_follows_a_language_by_swapping_the_voice(monkeypatch):
     monkeypatch.setenv("TTS_PROVIDER", "deepgram")
-
     assert language_settings(Language.EN) == TTSSettings(voice="aura-2-arcas-en")
-
-
-def test_deepgram_stays_put_rather_than_reconnecting_for_nothing(monkeypatch):
-    """A language setting it ignores would still cost a socket reconnect."""
-    monkeypatch.setenv("TTS_PROVIDER", "deepgram")
-
     assert language_settings(Language.FR) is None
+
+
+def test_catalan_does_not_send_an_unsupported_cartesia_language(monkeypatch):
+    monkeypatch.setenv("TTS_PROVIDER", "cartesia")
+    assert language_settings(Language.CA) == TTSSettings(language=Language.ES)

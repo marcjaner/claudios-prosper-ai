@@ -6,9 +6,10 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, cast
+from urllib.parse import urlparse
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -59,12 +60,14 @@ class Completion:
     text: str
     sources: list[str]
     usage: Usage
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class StructuredCompletion[T: BaseModel]:
     data: T
     usage: Usage
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,7 @@ class ToolCompletion:
     text: str
     tool_calls: list[LLMToolCall]
     usage: Usage
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -114,6 +118,7 @@ class LLMClient:
         default_reasoning_effort: str | None = None,
         default_max_tokens: int = 4096,
         max_retries: int = 2,
+        provider: str | None = None,
     ) -> None:
         """Configure completion defaults and lazy client caches."""
         self.default_model = default_model
@@ -123,6 +128,7 @@ class LLMClient:
         self.default_reasoning_effort = default_reasoning_effort
         self.default_max_tokens = default_max_tokens
         self.max_retries = max_retries
+        self.provider = provider
         self._clients: dict[tuple[str, str | None], OpenAI] = {}
 
     def _get_client(self, model_id: str) -> OpenAI:
@@ -186,6 +192,15 @@ class LLMClient:
         )
 
     @staticmethod
+    def _response_metadata(response: ChatCompletion) -> dict[str, Any]:
+        values = {
+            "generation_id": getattr(response, "id", None),
+            "provider": getattr(response, "provider", None),
+            "cost_usd": getattr(response.usage, "cost", None),
+        }
+        return {key: value for key, value in values.items() if value is not None}
+
+    @staticmethod
     def _sources_from(message: object) -> list[str]:
         """
         Scrape ``url_citation`` URLs off ``message.annotations``.
@@ -222,6 +237,10 @@ class LLMClient:
                 self.default_max_tokens if max_tokens is None else max_tokens
             ),
         }
+        if self.provider:
+            kwargs["extra_body"] = {
+                "provider": {"only": [self.provider], "allow_fallbacks": False}
+            }
         resolved_reasoning_effort = reasoning_effort or self.default_reasoning_effort
         if resolved_reasoning_effort:
             kwargs["reasoning_effort"] = resolved_reasoning_effort
@@ -289,7 +308,7 @@ class LLMClient:
             prompt, resolved_model, temperature, max_tokens, reasoning_effort
         )
         if extra_body:
-            kwargs["extra_body"] = extra_body
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
         response = self._create_chat_completion(client, kwargs, model=resolved_model)
         _logger.info("Received plain completion model=%s", resolved_model)
         message = response.choices[0].message
@@ -298,6 +317,7 @@ class LLMClient:
             text=text,
             sources=self._sources_from(message),
             usage=self._usage_from(response.usage),
+            metadata=self._response_metadata(response),
         )
 
     def complete_structured[T: BaseModel](
@@ -319,7 +339,7 @@ class LLMClient:
             prompt, resolved_model, temperature, max_tokens, reasoning_effort
         )
         if extra_body:
-            kwargs["extra_body"] = extra_body
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
         kwargs["response_format"] = {
             "type": "json_schema",
             "json_schema": {
@@ -343,7 +363,11 @@ class LLMClient:
                 f"Model response did not validate against {schema.__name__}."
             ) from exc
 
-        return StructuredCompletion(data=data, usage=self._usage_from(response.usage))
+        return StructuredCompletion(
+            data=data,
+            usage=self._usage_from(response.usage),
+            metadata=self._response_metadata(response),
+        )
 
     def complete_with_tools(
         self,
@@ -385,6 +409,7 @@ class LLMClient:
             text=message.content or "",
             tool_calls=tool_calls,
             usage=self._usage_from(response.usage),
+            metadata=self._response_metadata(response),
         )
 
 
@@ -397,4 +422,9 @@ def get_llm_client() -> LLMClient:
         api_key=api_key,
         base_url=base_url,
         default_reasoning_effort=reasoning_effort,
+        provider=(
+            os.getenv("OPENROUTER_PROVIDER") or None
+            if urlparse(base_url).hostname == "openrouter.ai"
+            else None
+        ),
     )

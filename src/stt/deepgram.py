@@ -11,9 +11,9 @@ from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
 from pipecat.frames.frames import (
     InputAudioRawFrame,
     InterimTranscriptionFrame,
+    ProposedUserStoppedSpeakingFrame,
     SystemFrame,
     TranscriptionFrame,
-    UserStoppedSpeakingFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -81,7 +81,6 @@ class _PendingEOT:
     candidate_at: float
     vad_state: str
     deepgram_event: str
-    transcript_emitted: bool = False
     task: asyncio.Task | None = None
     smart_turn_probability: float | None = None
 
@@ -153,6 +152,12 @@ class DeepgramEOTCoordinator(FrameProcessor):
         if isinstance(frame, InterimTranscriptionFrame):
             self._segment_final = None
 
+        if isinstance(frame, TranscriptionFrame):
+            # Keep recognized text in the aggregator while only the turn-end
+            # decision waits. Withholding text races its inactivity timeout.
+            frame.finalized = False
+            await self.push_frame(frame, direction)
+
         if isinstance(frame, TranscriptionFrame) and getattr(
             frame.result, "speech_final", False
         ):
@@ -163,15 +168,15 @@ class DeepgramEOTCoordinator(FrameProcessor):
         if isinstance(frame, TranscriptionFrame) and self._has_vad_activity:
             if self._vad_user_speaking:
                 self._segment_final = (frame, direction)
-                await self.push_frame(frame, direction)
             else:
                 await self._start_candidate(frame, direction, "is_final")
             return
 
-        await self.push_frame(frame, direction)
+        if not isinstance(frame, TranscriptionFrame):
+            await self.push_frame(frame, direction)
 
     async def cleanup(self):
-        await self._cancel_pending_eot("cleanup", emit_transcript=False)
+        await self._cancel_pending_eot("cleanup")
         await self._smart_turn.cleanup()
         await super().cleanup()
 
@@ -189,8 +194,6 @@ class DeepgramEOTCoordinator(FrameProcessor):
         transcript: TranscriptionFrame,
         direction: FrameDirection,
         deepgram_event: str,
-        *,
-        transcript_emitted: bool = False,
     ) -> None:
         vad_state = "speaking" if self._vad_user_speaking else "quiet"
         pending = _PendingEOT(
@@ -199,7 +202,6 @@ class DeepgramEOTCoordinator(FrameProcessor):
             candidate_at=asyncio.get_running_loop().time(),
             vad_state=vad_state,
             deepgram_event=deepgram_event,
-            transcript_emitted=transcript_emitted,
         )
         self._pending_eot = pending
         await self._emit_eot_event(pending, decision="candidate")
@@ -252,7 +254,6 @@ class DeepgramEOTCoordinator(FrameProcessor):
             transcript,
             direction,
             "is_final",
-            transcript_emitted=True,
         )
 
     async def _analyze_smart_turn(self):
@@ -264,20 +265,16 @@ class DeepgramEOTCoordinator(FrameProcessor):
 
     async def _commit_eot(self, pending: _PendingEOT) -> None:
         self._pending_eot = None
-        pending.transcript.finalized = True
         await self._emit_eot_event(pending, decision="committed")
-        await self.push_frame(UserStoppedSpeakingFrame(), pending.direction)
-        if not pending.transcript_emitted:
-            await self.push_frame(pending.transcript, pending.direction)
+        # A control frame stays ordered after the text, unlike a system frame.
+        await self.push_frame(ProposedUserStoppedSpeakingFrame(), pending.direction)
         self._segment_final = None
         self._has_vad_activity = False
         self._audio_chunks.clear()
         self._audio_bytes = 0
         self._smart_turn.clear()
 
-    async def _cancel_pending_eot(
-        self, reason: str, *, emit_transcript: bool = True
-    ) -> None:
+    async def _cancel_pending_eot(self, reason: str) -> None:
         pending = self._pending_eot
         if pending is None:
             return
@@ -291,14 +288,11 @@ class DeepgramEOTCoordinator(FrameProcessor):
             except asyncio.CancelledError:
                 pass
 
-        pending.transcript.finalized = False
         await self._emit_eot_event(
             pending,
             decision="cancelled",
             cancellation_reason=reason,
         )
-        if emit_transcript and not pending.transcript_emitted:
-            await self.push_frame(pending.transcript, pending.direction)
 
     async def _emit_eot_event(
         self,
@@ -329,9 +323,13 @@ class DeepgramEOTCoordinator(FrameProcessor):
 
 
 class DeepgramEndpointingStopStrategy(BaseUserTurnStopStrategy):
+    @property
+    def resolves_proposed_turn_stop_frames(self) -> bool:
+        return True
+
     async def process_frame(self, frame) -> ProcessFrameResult:
-        if isinstance(frame, TranscriptionFrame) and frame.finalized:
-            await self.trigger_user_turn_stopped(enable_user_speaking_frames=False)
+        if isinstance(frame, ProposedUserStoppedSpeakingFrame):
+            await self.trigger_user_turn_stopped()
         return ProcessFrameResult.CONTINUE
 
 
@@ -348,6 +346,7 @@ def create_deepgram_stt(api_key: str | None = None) -> DeepgramSTTService:
         keyterm=DEEPGRAM_KEYTERMS,
         numerals=True,
         punctuate=True,
-        smart_format=True,
+        # Preserve spoken months: smart formatting turns 9 April into 04/09.
+        smart_format=False,
     )
     return BoundedDeepgramSTTService(api_key=api_key, settings=settings)

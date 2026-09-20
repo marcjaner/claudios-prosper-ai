@@ -80,7 +80,8 @@ def language_settings(
     """
     env = os.environ if env is None else env
     if env.get("TTS_PROVIDER", DEFAULT_PROVIDER).strip().lower() != "deepgram":
-        return TTSSettings(language=language)
+        # Sonic has no native Catalan voice; use its Spanish voice for Catalan text.
+        return TTSSettings(language=Language.ES if language == Language.CA else language)
 
     voice = DEEPGRAM_VOICES.get(language)
     return TTSSettings(voice=voice) if voice else None

@@ -141,3 +141,20 @@ def test_speculative_context_is_forwarded_without_running(monkeypatch, bus):
     assert processor.emitted == [frame]
     assert not bus.events
     assert not bus.updates
+
+
+def test_language_changes_before_inference_and_speech(monkeypatch, bus):
+    from pipecat.frames.frames import TTSUpdateSettingsFrame
+    from pipecat.transcriptions.language import Language
+
+    calls = []
+    monkeypatch.setenv('TTS_PROVIDER', 'cartesia')
+    monkeypatch.setattr(agent.reply, 'run_agent_turn', fake_runner(
+        calls, [AgentResponse(immediate_answer='¿Cuál es su nombre?')]))
+    processor = CapturingAgentReply('CA456', object())
+    context = LLMContext([{'role': 'user', 'content': 'Hola, quiero una cita.'}])
+    asyncio.run(processor.process_frame(LLMContextFrame(context), FrameDirection.DOWNSTREAM))
+    assert calls[0][3]['language'] == Language.ES
+    assert isinstance(processor.emitted[0], TTSUpdateSettingsFrame)
+    assert processor.emitted[0].delta.language == Language.ES
+    assert any(isinstance(frame, TTSSpeakFrame) for frame in processor.emitted[1:])

@@ -1,28 +1,12 @@
-"""The language the call is conducted in.
+"""Choose reply language from complete caller turns, preserving it for names and IDs."""
 
-Deepgram tags every transcript with the language it heard, so the signal is
-already in the pipeline and costs nothing extra. A single utterance is a weak
-read — a Spanish surname inside an English sentence comes back as Spanish — so
-the call only moves once AGREEING_TURNS transcripts in a row say the same
-thing. The STT itself is never reconfigured: nova-3 `multi` already transcribes
-every language below in one stream, and changing its settings would reconnect
-the socket mid-call.
-"""
-
-import logging
+import re
+import unicodedata
 from dataclasses import dataclass
 
-from pipecat.frames.frames import Frame, TranscriptionFrame, TTSUpdateSettingsFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transcriptions.language import Language
 
-from observability import emit
-from tts import language_settings
-
-logger = logging.getLogger(__name__)
-
 DEFAULT_LANGUAGE = Language.EN
-AGREEING_TURNS = 2
 
 
 @dataclass(frozen=True)
@@ -37,6 +21,13 @@ class Phrases:
 
 
 PHRASES = {
+    Language.CA: Phrases(
+        name="Catalan",
+        greeting="Clínica Arenal, en què us puc ajudar?",
+        acknowledgement="Un moment, ho consulto.",
+        no_answer="Perdoneu, podeu repetir què necessiteu?",
+        error="Ho sento, no ho he pogut processar. Ho podeu repetir?",
+    ),
     Language.ES: Phrases(
         name="Spanish",
         greeting="Clínica Arenal, ¿en qué puedo ayudarle?",
@@ -64,75 +55,187 @@ def reply_instruction(language: Language) -> str:
     return f"Reply to the caller in {written.name if written else language.value}."
 
 
-def _base(language: Language) -> Language:
-    """es-ES and es are the same call language."""
-    return Language(language.value.split("-")[0])
+LANGUAGE_WORDS = {
+    Language.EN: {
+        "i",
+        "my",
+        "me",
+        "am",
+        "is",
+        "are",
+        "have",
+        "want",
+        "need",
+        "would",
+        "like",
+        "appointment",
+        "please",
+        "could",
+        "can",
+        "speak",
+        "english",
+        "the",
+        "with",
+        "for",
+        "and",
+        "that",
+        "this",
+        "you",
+        "your",
+        "birth",
+        "book",
+        "works",
+        "tomorrow",
+        "thanks",
+        "hello",
+        "yes",
+    },
+    Language.ES: {
+        "perdone",
+        "acabo",
+        "entender",
+        "si",
+        "dia",
+        "yo",
+        "mi",
+        "soy",
+        "estoy",
+        "tengo",
+        "quiero",
+        "queria",
+        "necesito",
+        "cita",
+        "quisiera",
+        "puedo",
+        "puede",
+        "podemos",
+        "hablar",
+        "espanol",
+        "castellano",
+        "para",
+        "una",
+        "un",
+        "con",
+        "por",
+        "favor",
+        "que",
+        "me",
+        "la",
+        "el",
+        "usted",
+        "fecha",
+        "nacimiento",
+        "reservar",
+        "gracias",
+        "buenos",
+        "buenas",
+        "hola",
+        "manana",
+    },
+    Language.CA: {
+        "soc",
+        "estic",
+        "tinc",
+        "vull",
+        "voldria",
+        "necessito",
+        "visita",
+        "demanar",
+        "hora",
+        "metge",
+        "metgessa",
+        "puc",
+        "podeu",
+        "podem",
+        "parlar",
+        "catala",
+        "sisplau",
+        "gracies",
+        "bon",
+        "bona",
+        "dia",
+        "tarda",
+        "naixement",
+        "per",
+        "una",
+        "amb",
+        "em",
+        "que",
+        "el",
+        "la",
+        "si",
+        "us",
+        "plau",
+        "dema",
+    },
+}
+LANGUAGE_NAMES = {
+    "english": Language.EN,
+    "ingles": Language.EN,
+    "angles": Language.EN,
+    "spanish": Language.ES,
+    "espanol": Language.ES,
+    "castellano": Language.ES,
+    "catalan": Language.CA,
+    "catala": Language.CA,
+}
+
+
+def _normalize(text: str) -> str:
+    return "".join(
+        c
+        for c in unicodedata.normalize("NFKD", text.lower())
+        if not unicodedata.combining(c)
+    )
+
+
+def _requested_language(text: str) -> Language | None:
+    # A doctor-language requirement is separate from the conversation language.
+    matches = list(
+        re.finditer(
+            r"(?:speak|speaking|switch to|continue in|hablar|hablamos|parlar|parlem)\s+(?:(?:in|en)\s+)?"
+            r"(english|ingles|angles|spanish|espanol|castellano|catalan|catala)\b",
+            text,
+        )
+    )
+    for match in reversed(matches):
+        prefix = re.split(r"[.!?,;]", text[: match.start()])[-1]
+        if re.search(
+            r"\b(doctor|provider|medico|metge|metgessa|don't|do not|cannot|can't|not|no|neither|ni)\b",
+            prefix,
+        ):
+            continue
+        return LANGUAGE_NAMES[match[1]]
+    return None
 
 
 class CallLanguage:
-    """The language of the call so far: one writer, several readers."""
-
     def __init__(self, language: Language = DEFAULT_LANGUAGE):
         self.language = language
-        self._candidate: Language | None = None
-        self._agreements = 0
 
-    def observe(self, heard: Language | None) -> bool:
-        """Record one transcript's language. True when the call language moved."""
-        if heard is None:
+    def observe_turn(self, text: str) -> bool:
+        normalized = _normalize(text)
+        requested = _requested_language(normalized)
+        if requested is None:
+            words = set(re.findall(r"[a-z]+", normalized))
+            if (
+                "hola" in words
+                and self.language == Language.EN
+                and not (
+                    words & (LANGUAGE_WORDS[Language.EN] - LANGUAGE_WORDS[Language.ES])
+                )
+            ):
+                self.language = Language.ES
+                return True
+            scores = {
+                language: len(words & markers)
+                for language, markers in LANGUAGE_WORDS.items()
+            }
+            ranked = sorted(scores, key=lambda language: scores[language], reverse=True)
+            if scores[ranked[0]] < 2 or scores[ranked[0]] == scores[ranked[1]]:
+                return False
+            requested = ranked[0]
+        if requested == self.language:
             return False
-
-        heard = _base(heard)
-        if heard == self.language:
-            self._candidate = None
-            self._agreements = 0
-            return False
-
-        self._agreements = self._agreements + 1 if heard == self._candidate else 1
-        self._candidate = heard
-        if self._agreements < AGREEING_TURNS:
-            return False
-
-        self.language = heard
-        self._candidate = None
-        self._agreements = 0
+        self.language = requested
         return True
-
-
-class LanguageTracker(FrameProcessor):
-    """Follows the caller's language and moves the voice with it.
-
-    Belongs upstream of the context aggregator, which swallows transcription
-    frames rather than forwarding them.
-    """
-
-    def __init__(self, call_id: str, language: CallLanguage):
-        super().__init__()
-        self._call_id = call_id
-        self._language = language
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-
-        # The update has to lead the transcript that earned it: this frame can
-        # end the turn, and the reply would then be spoken in the old voice.
-        if isinstance(frame, TranscriptionFrame) and self._language.observe(
-            frame.language
-        ):
-            await self._follow_the_caller()
-
-        await self.push_frame(frame, direction)
-
-    async def _follow_the_caller(self) -> None:
-        language = self._language.language
-        logger.info(
-            "call language changed | call_id=%s language=%s", self._call_id, language
-        )
-        emit(self._call_id, "language_changed", {"language": language.value})
-
-        settings = language_settings(language)
-        if settings is None:
-            return
-        await self.push_frame(
-            TTSUpdateSettingsFrame(delta=settings), FrameDirection.DOWNSTREAM
-        )

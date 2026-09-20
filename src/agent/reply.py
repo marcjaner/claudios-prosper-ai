@@ -1,11 +1,18 @@
 import logging
 import time
 
-from pipecat.frames.frames import Frame, LLMContextFrame, SystemFrame, TTSSpeakFrame
+from pipecat.frames.frames import (
+    Frame,
+    LLMContextFrame,
+    SystemFrame,
+    TTSSpeakFrame,
+    TTSUpdateSettingsFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from observability import emit, update_call
 from observability.frames import TTSRequestedFrame
+from tts import language_settings
 
 from .agent import run_agent_turn
 from .language import CallLanguage, phrases
@@ -45,6 +52,17 @@ class AgentReply(FrameProcessor):
             )
         logger.info("agent turn received | call_id=%s prompt=%r", self.call_id, content)
         update_call(self.call_id, state="thinking")
+        if self.language.observe_turn(content):
+            emit(
+                self.call_id,
+                "language_changed",
+                {"language": self.language.language.value},
+            )
+            settings = language_settings(self.language.language)
+            if settings is not None:
+                await self.push_frame(
+                    TTSUpdateSettingsFrame(delta=settings), FrameDirection.DOWNSTREAM
+                )
         # Read once: the turn answers in the language the caller was speaking
         # when it started, even if they interrupt it in another.
         language = self.language.language

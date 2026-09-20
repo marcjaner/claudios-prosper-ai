@@ -24,7 +24,7 @@ from stt import (
 from tts import create_tts
 from twilio import AgentFactory, CallMeta
 
-from .language import DEFAULT_LANGUAGE, CallLanguage, LanguageTracker, phrases
+from .language import DEFAULT_LANGUAGE, CallLanguage, phrases
 from .reply import AgentReply
 from .stage_runtime import CallGraph
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 CompletedTurnCallback = Callable[[CallMeta, str], Awaitable[None]]
 USER_TURN_STOP_TIMEOUT_SECONDS = 6
-EMPTY_TURN_RECOVERY_MESSAGE = "Sorry, I didn't catch that. Could you repeat it?"
+EMPTY_TURN_RECOVERY_MESSAGE = phrases(DEFAULT_LANGUAGE).no_answer
 # The greeting plays before the caller has said a word, so it is always the default.
 INITIAL_GREETING = phrases(DEFAULT_LANGUAGE).greeting
 
@@ -54,7 +54,11 @@ class TranscriptObserver(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallback):
+def create_user_aggregator(
+    meta: CallMeta,
+    on_completed_turn: CompletedTurnCallback,
+    language: CallLanguage | None = None,
+):
     params = LLMUserAggregatorParams(
         user_turn_stop_timeout=USER_TURN_STOP_TIMEOUT_SECONDS,
         user_turn_strategies=UserTurnStrategies(
@@ -76,11 +80,14 @@ def create_user_aggregator(meta: CallMeta, on_completed_turn: CompletedTurnCallb
             await on_completed_turn(meta, message.content)
             return
         logger.warning("empty user turn | call_id=%s", meta.call_id)
+        recovery_message = phrases(
+            language.language if language else DEFAULT_LANGUAGE
+        ).no_answer
         await _aggregator.push_frame(
-            TTSRequestedFrame(EMPTY_TURN_RECOVERY_MESSAGE), FrameDirection.DOWNSTREAM
+            TTSRequestedFrame(recovery_message), FrameDirection.DOWNSTREAM
         )
         await _aggregator.push_frame(
-            TTSSpeakFrame(EMPTY_TURN_RECOVERY_MESSAGE), FrameDirection.DOWNSTREAM
+            TTSSpeakFrame(recovery_message), FrameDirection.DOWNSTREAM
         )
 
     return aggregator
@@ -123,8 +130,7 @@ def create_transcription_agent(
             create_deepgram_stt(),
             DeepgramEOTCoordinator(),
             TranscriptObserver(meta),
-            LanguageTracker(meta.call_id, language),
-            create_user_aggregator(meta, on_completed_turn),
+            create_user_aggregator(meta, on_completed_turn, language),
             AgentReply(meta.call_id, repository, state, language),
             create_tts(),
         ]
