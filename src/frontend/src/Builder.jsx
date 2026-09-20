@@ -241,6 +241,8 @@ export default function Builder() {
   // Renaming on every keystroke would forbid clearing the field to retype.
   const [draftId, setDraftId] = useState(null);
   const [draftKeys, setDraftKeys] = useState(null);
+  // The stage name reads as a title; editing is opt-in behind the pencil.
+  const [editingName, setEditingName] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -411,13 +413,18 @@ export default function Builder() {
           onNodeClick={(_, clicked) => {
             setDraftId(null);
             setDraftKeys(null);
+            setEditingName(false);
             setSelected({ kind: "node", id: clicked.id });
           }}
           onEdgeClick={(_, clicked) => {
             setDraftKeys(null);
+            setEditingName(false);
             setSelected({ kind: "edge", id: clicked.id });
           }}
-          onPaneClick={() => setSelected(null)}
+          onPaneClick={() => {
+            setEditingName(false);
+            setSelected(null);
+          }}
           fitView
           colorMode="light"
         >
@@ -455,23 +462,44 @@ export default function Builder() {
 
         {node && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-2">
+            {editingName ? (
               <input
+                autoFocus
                 value={draftId ?? node.id}
                 onChange={(event) => setDraftId(event.target.value)}
-                onBlur={(event) => renameStage(node.id, event.target.value)}
+                onBlur={(event) => {
+                  renameStage(node.id, event.target.value);
+                  setEditingName(false);
+                }}
                 onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
-                className="clinic-control min-w-0 flex-1 font-mono text-slate-900"
+                className="clinic-control w-full text-slate-900"
               />
-              {entry !== node.id && (
+            ) : (
+              <div className="flex items-center gap-2">
+                <h2 className="min-w-0 flex-1 truncate text-lg font-semibold text-slate-900">
+                  {node.id}
+                </h2>
                 <button
-                  onClick={() => makeEntry(node.id)}
-                  className="shrink-0 text-xs font-medium text-slate-500 hover:text-emerald-600"
+                  onClick={() => {
+                    setDraftId(node.id);
+                    setEditingName(true);
+                  }}
+                  aria-label="Editar nombre"
+                  className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
                 >
-                  marcar como entrada
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-4 w-4 fill-none stroke-current"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+                  </svg>
                 </button>
-              )}
-            </div>
+              </div>
+            )}
 
             <label className="block">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -484,6 +512,25 @@ export default function Builder() {
                 className="clinic-control mt-1 w-full"
               />
             </label>
+
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-700">Etapa de entrada</p>
+                <p className="text-[11px] text-slate-400">La llamada empieza en esta etapa.</p>
+              </div>
+              {entry === node.id ? (
+                <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                  Activada
+                </span>
+              ) : (
+                <button
+                  onClick={() => makeEntry(node.id)}
+                  className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300"
+                >
+                  Marcar como entrada
+                </button>
+              )}
+            </div>
 
             <details className="group rounded-xl border border-slate-200">
               <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-sm font-medium text-slate-600 [&::-webkit-details-marker]:hidden">
