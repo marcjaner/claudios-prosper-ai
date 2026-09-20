@@ -204,7 +204,13 @@ def test_every_model_call_records_its_time_and_prompt_size(monkeypatch):
     assert [call["purpose"] for call in model_calls] == ["tools"] * 4 + ["answer"]
     # A number nobody can trace back to a call is not observability.
     assert {cid for cid, kind, _ in recorded if kind == module.LLM_EVENT} == {"CA-1"}
-    assert all(call["stage"] == "identify" for call in model_calls)
+    assert [call["stage"] for call in model_calls] == [
+        "identify",
+        "identify",
+        "book",
+        "book",
+        "book",
+    ]
     assert all(call["turn"] == 1 for call in model_calls)
     # The size must be the size of the prompt that was actually sent, not merely
     # some growing number: compare against what the client received.
