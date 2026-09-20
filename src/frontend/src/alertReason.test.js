@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { alertReason } from "./alertReason.js";
+import { alertReason, needsAttention, parseScore } from "./alertReason.js";
 
 function dimensions(scores) {
   return Object.fromEntries(Object.entries(scores).map(([key, score]) => [key, { score }]));
@@ -51,4 +51,21 @@ test("penalties are appended to the causes", () => {
 test("nothing to explain yields null", () => {
   assert.equal(alertReason({ score_overall: 30 }, null), null);
   assert.equal(alertReason({ score_overall: 30 }, { dimensions: {} }), null);
+});
+
+test("a guardrail breach always needs attention", () => {
+  assert.equal(needsAttention({ guardrail_breached: 1 }, null, true), true);
+});
+
+test("a low score needs attention after two live turns", () => {
+  const call = { score_overall: 39 };
+  assert.equal(needsAttention(call, { turn_count: 1 }, true), false);
+  assert.equal(needsAttention(call, { turn_count: 2 }, true), true);
+  assert.equal(needsAttention(call, { turn_count: 2 }, false), false);
+});
+
+test("score JSON parsing tolerates missing and malformed values", () => {
+  assert.deepEqual(parseScore('{"turn_count":2}'), { turn_count: 2 });
+  assert.equal(parseScore("not-json"), null);
+  assert.equal(parseScore(null), null);
 });

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import WallOverview from "./WallOverview.jsx";
-import { alertReason } from "./alertReason.js";
+import { alertReason, needsAttention, parseScore } from "./alertReason.js";
 import { useOperatorLine } from "./useOperatorLine.js";
 
 // Every call is cut off at ten minutes, so duration is a countdown.
@@ -87,15 +87,6 @@ function DurationRing({ seconds, live }) {
   );
 }
 
-function parseScoreJson(raw) {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
 function currentAction(events, call) {
   if (call.state === "operator") return "Clinic staff on the line";
   const pending = new Map();
@@ -175,14 +166,11 @@ function CallCard({ call, events, now }) {
   const live = !call.ended_at;
   const seconds = (live ? now : call.ended_at) - call.started_at;
   const state = STATE_LABELS[call.state] ?? call.state ?? "—";
-  const score = parseScoreJson(call.score_json);
-  const turnCount = score?.turn_count ?? 0;
-  const hasScore = typeof call.score_overall === "number";
+  const score = parseScore(call.score_json);
   // This tab holds the line, or another one does; either way the agent is out.
   const onLine = live && linePhase !== "idle" && linePhase !== "ended" && linePhase !== "error";
   const heldElsewhere = live && !onLine && call.state === "operator";
-  const worrying = Boolean(call.guardrail_breached) || (turnCount >= 2 && hasScore && call.score_overall < 40);
-  const alert = live && !onLine && !heldElsewhere && worrying;
+  const alert = live && !onLine && !heldElsewhere && needsAttention(call, score, live);
   const reason = alert ? alertReason(call, score) ?? "Clinic staff should review this call" : null;
   const staff = onLine || heldElsewhere || call.handled_by === "operator";
   const action = live ? currentAction(events, call) : "Call completed";
