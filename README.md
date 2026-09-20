@@ -35,6 +35,13 @@ it uses `PORT`, then the first free Conductor workspace port, then the first
 free port starting at `7860`. The call tester is at `/` and the observability
 console at `/app` on that address.
 
+The agent configuration (the stage graph the builder edits) is a JSON file at
+`AGENT_GRAPH_PATH`, defaulting to the bundled `graphs/default.json`. On a
+platform with an ephemeral filesystem (e.g. Railway), point it at a persistent
+volume — `AGENT_GRAPH_PATH=/data/graph.json` — so builder edits survive
+redeploys and restarts. An empty volume is seeded from the bundled default on
+first load.
+
 ## Twilio transport
 
 `src/twilio/` is the WebSocket server the harness dials. It owns the wire and
