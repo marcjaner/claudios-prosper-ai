@@ -12,7 +12,11 @@ from sqlalchemy.engine import make_url
 
 from observability import EventBus, Store, set_bus, subscribe
 from observability.api import register_dashboard
-from scoring import DEFAULT_MODEL, run_scoring_worker
+from scoring import (
+    DEFAULT_MODEL,
+    run_patient_satisfaction_worker,
+    run_scoring_worker,
+)
 from storage import CallRepository, Database
 
 from .transport import AgentFactory, run_call
@@ -81,19 +85,28 @@ def create_app(
         drain = asyncio.create_task(bus.run())
         api_key = os.getenv("TYPESAFE_API_KEY", "").strip() or None
         model = os.getenv("TYPESAFE_DEFAULT_MODEL", "").strip() or DEFAULT_MODEL
-        subscription = subscribe() if api_key else nullcontext(None)
-        with subscription as queue:
+        scoring_subscription = subscribe() if api_key else nullcontext(None)
+        satisfaction_subscription = subscribe() if api_key else nullcontext(None)
+        with (
+            scoring_subscription as queue,
+            satisfaction_subscription as satisfaction_queue,
+        ):
             scorer = (
-                asyncio.create_task(
-                    run_scoring_worker(store, queue, api_key, model)
-                )
+                asyncio.create_task(run_scoring_worker(store, queue, api_key, model))
                 if queue is not None and api_key is not None
+                else None
+            )
+            satisfaction_scorer = (
+                asyncio.create_task(
+                    run_patient_satisfaction_worker(satisfaction_queue, api_key, model)
+                )
+                if satisfaction_queue is not None and api_key is not None
                 else None
             )
             try:
                 yield
             finally:
-                for task in (scorer, drain):
+                for task in (scorer, satisfaction_scorer, drain):
                     if task is not None:
                         task.cancel()
                         with suppress(asyncio.CancelledError):
