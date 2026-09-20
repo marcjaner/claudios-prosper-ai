@@ -9,7 +9,7 @@ import Guardrails from "./Guardrails.jsx";
 import { useLiveCalls } from "./useLiveCalls.js";
 
 const VIEWS = {
-  "#/wall": { label: "Wall", component: Wall },
+  "#/wall": { label: "Monitor", component: Wall },
   "#/historico": { label: "Histórico", component: History },
   "#/guardrails": { label: "Rules", component: Guardrails },
 };
@@ -108,7 +108,7 @@ export default function App() {
               }
             >
               {clinicTheme
-                ? { "#/wall": "Wall", "#/historico": "History", "#/guardrails": "Rules" }[hash]
+                ? { "#/wall": "Monitor", "#/historico": "History", "#/guardrails": "Rules" }[hash]
                 : label}
             </a>
           ))}
