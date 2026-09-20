@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import AgentActions from "./AgentActionGraph.jsx";
 import { StaffBadge } from "./History.jsx";
+import { PatientSatisfactionDetail } from "./PatientSatisfaction.jsx";
 import StageTrace from "./StageTrace.jsx";
 import Transcript from "./Transcript.jsx";
 import { getActionReason } from "./agentGraph.js";
@@ -123,6 +124,59 @@ function AttentionWarning({ callId, reason }) {
   );
 }
 
+// The agent reads staff instructions on the caller's next turn, so sending one
+// never interrupts anybody; the echo is the "Clinic staff" bubble in the transcript.
+function StaffInstruction({ callId }) {
+  const [text, setText] = useState("");
+  const [status, setStatus] = useState("idle");
+
+  const send = async (event) => {
+    event.preventDefault();
+    const trimmed = text.trim();
+    if (!trimmed || status === "sending") return;
+    setStatus("sending");
+    try {
+      const response = await fetch(`/api/calls/${callId}/instructions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: trimmed }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setText("");
+      setStatus("idle");
+    } catch {
+      setStatus("error");
+    }
+  };
+
+  return (
+    <form onSubmit={send} className="border-t border-slate-100 px-4 py-3">
+      <label htmlFor={`instruction-${callId}`} className="text-xs font-medium text-violet-700">
+        Instruct the agent
+      </label>
+      <div className="mt-1.5 flex gap-2">
+        <input
+          id={`instruction-${callId}`}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="e.g. Only offer afternoon slots"
+          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
+        />
+        <button
+          type="submit"
+          disabled={!text.trim() || status === "sending"}
+          className={`${PILL} bg-violet-600 text-white hover:bg-violet-700 focus-visible:outline-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400`}
+        >
+          {status === "sending" ? "Sending…" : "Send to agent"}
+        </button>
+      </div>
+      <p className={`mt-1.5 text-[11px] ${status === "error" ? "text-rose-600" : "text-slate-400"}`}>
+        {status === "error" ? "Could not send: the call may have ended." : "Applied on the patient's next turn."}
+      </p>
+    </form>
+  );
+}
+
 export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   const [stored, setStored] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -201,26 +255,47 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
       {attention && <AttentionWarning key={callId} callId={callId} reason={attentionReason} />}
 
       <aside aria-label="Patient information" className="clinic-panel min-w-0 shrink-0 p-5">
-        <div className="flex items-start justify-between gap-3">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.8fr)]">
           <div className="min-w-0">
-            <p className="text-xs text-slate-400">Patient</p>
-            <h2 className="mt-0.5 break-words text-xl font-semibold tracking-tight text-slate-950">
-              {call.patient_name ?? "Unidentified caller"}
-            </h2>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs text-slate-400">Patient</p>
+                <h2 className="mt-0.5 break-words text-xl font-semibold tracking-tight text-slate-950">
+                  {call.patient_name ?? "Unidentified caller"}
+                </h2>
+              </div>
+              <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
+                {call.insurer ?? "Insurer unknown"}
+              </span>
+            </div>
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+              <Field label="Patient ID">{call.patient_id}</Field>
+              <Field label="Caller">{call.from_number ?? "Hidden"}</Field>
+              <Field label="Started">{timeFormat.format(new Date(call.started_at * 1000))}</Field>
+              <Field label="Duration">{formatDuration(call)}</Field>
+              <Field label="First response">{call.ttfa_seconds != null ? `${call.ttfa_seconds.toFixed(2)} s` : null}</Field>
+              <Field label="Cost">{call.cost_eur != null ? `${call.cost_eur.toFixed(4)} €` : null}</Field>
+            </dl>
+            {call.pricing && (
+              <div className="mt-4 rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                <p className="font-semibold text-slate-800">Estimated provider cost</p>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
+                  <span>LLM ${(call.pricing.llm_usd ?? 0).toFixed(6)}</span>
+                  <span>STT ${(call.pricing.stt_usd ?? 0).toFixed(6)}</span>
+                  <span>TTS ${(call.pricing.tts_usd ?? 0).toFixed(6)}</span>
+                  <span>JEV ${(call.pricing.jev_usd ?? 0).toFixed(6)}</span>
+                  <span className="font-semibold text-slate-800">Total ${(call.pricing.total_usd ?? 0).toFixed(6)}</span>
+                </div>
+              </div>
+            )}
+            {call.error && <p className="mt-3 break-words rounded-xl bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">{call.error}</p>}
           </div>
-          <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
-            {call.insurer ?? "Insurer unknown"}
-          </span>
+          <PatientSatisfactionDetail
+            events={events}
+            startedAt={call.started_at}
+            endedAt={call.ended_at}
+          />
         </div>
-        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
-          <Field label="Patient ID">{call.patient_id}</Field>
-          <Field label="Caller">{call.from_number ?? "Hidden"}</Field>
-          <Field label="Started">{timeFormat.format(new Date(call.started_at * 1000))}</Field>
-          <Field label="Duration">{formatDuration(call)}</Field>
-          <Field label="First response">{call.ttfa_seconds != null ? `${call.ttfa_seconds.toFixed(2)} s` : null}</Field>
-          <Field label="Cost">{call.cost_eur != null ? `${call.cost_eur.toFixed(4)} €` : null}</Field>
-        </dl>
-        {call.error && <p className="mt-3 break-words rounded-xl bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">{call.error}</p>}
       </aside>
 
       <div className="call-detail-panels grid min-h-0 gap-4 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] xl:overflow-hidden">
@@ -247,6 +322,7 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
           <div className="min-h-0 flex-1 p-4">
             <Transcript events={events} startedAt={call.started_at} live={live} />
           </div>
+          {live && call.state !== "operator" && <StaffInstruction key={callId} callId={callId} />}
         </section>
       </div>
     </main>

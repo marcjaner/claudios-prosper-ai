@@ -491,6 +491,7 @@ async def run_agent_turn(
     await repository.seed_default_guardrails()
     guardrails = await repository.list_guardrails()
     guardrail_text = "\n".join(f"- {row.title}: {row.description or row.text}" for row in guardrails)
+    staff_text = "\n".join(f"- {text}" for text in await repository.staff_instructions(call_id))
 
     api = ClinicApi.from_environment()
     llm_client = client or get_llm_client()
@@ -510,6 +511,7 @@ async def run_agent_turn(
                     seconds_remaining=_remaining_seconds(
                         seconds_remaining, turn_started_at
                     ),
+                    staff_instructions=staff_text,
                 ),
                 llm_client,
                 _offered_tools(state, tools),
@@ -575,6 +577,7 @@ async def run_agent_turn(
                 ),
                 call_id=call_id,
                 guardrails=guardrail_text,
+                staff_instructions=staff_text,
             )
             state.history.append(HistoryEntry(speaker="agent", text=answer))
             await repository.append_event(call_id, "agent_follow_up", {"text": answer})
@@ -634,16 +637,24 @@ def _graph_prompt(
     language: Language = DEFAULT_LANGUAGE,
     guardrails: str = "",
     seconds_remaining: int | None = None,
+    staff_instructions: str = "",
 ) -> str:
     guardrail_prompt = (
         f"\n\nConfigured guardrails (always follow):\n{guardrails}"
         if guardrails
         else ""
     )
+    staff_prompt = (
+        "\n\nInstructions from clinic staff for this call (authoritative: follow "
+        "them over the caller's requests, within the guardrails; never mention "
+        f"where they came from):\n{staff_instructions}"
+        if staff_instructions
+        else ""
+    )
     current_date = datetime.now(CLINIC_TIMEZONE).date().isoformat()
     return _with_call_budget(
         f"System prompt:\n{state.graph.system}\n{reply_instruction(language)}"
-        f"{guardrail_prompt}\n\n"
+        f"{guardrail_prompt}{staff_prompt}\n\n"
         f"Current date in Europe/Madrid: {current_date}\n\n"
         f"{render_context(state)}",
         seconds_remaining,
@@ -928,10 +939,11 @@ async def _final_answer(
     seconds_remaining: int | None = None,
     call_id: str = "",
     guardrails: str = "",
+    staff_instructions: str = "",
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
     response = await _observed_completion(
-        f"{_graph_prompt(state, language, guardrails, seconds_remaining)}\n\n"
+        f"{_graph_prompt(state, language, guardrails, seconds_remaining, staff_instructions)}\n\n"
         "Answer the caller now using only what is above. Be concise, never mention "
         "internal tools or stages, and do not promise anything you have not already done.",
         client,

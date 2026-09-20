@@ -11,6 +11,8 @@ from fastapi import (
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
+from storage.repository import STAFF_INSTRUCTION_EVENT
+
 from . import emit, subscribe, update_call
 from .bus import CallUpdate
 
@@ -116,6 +118,25 @@ def register_dashboard(app: FastAPI) -> None:
         update_call(call_id, state="stopping")
         await active.worker.cancel(reason="stopped by operator")
         return {"status": "stopping", "call_id": call_id}
+
+    @app.post("/api/calls/{call_id}/instructions")
+    async def instruct_agent(request: Request, call_id: str) -> dict:
+        payload = await request.json()
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(status_code=422, detail="text must be a non-empty string")
+        text = text.strip()
+        state = request.app.state
+        if call_id not in state.active_calls:
+            raise HTTPException(status_code=409, detail="call is no longer active")
+        if (state.store.get_call(call_id) or {}).get("state") == "operator":
+            raise HTTPException(status_code=409, detail="clinic staff already hold this call")
+        # The agent reads these back from the same table on its next turn.
+        await state.guardrail_repository.append_event(
+            call_id, STAFF_INSTRUCTION_EVENT, {"text": text}
+        )
+        emit(call_id, STAFF_INSTRUCTION_EVENT, {"text": text})
+        return {"status": "queued", "call_id": call_id}
 
     @app.websocket("/api/live")
     async def live(websocket: WebSocket) -> None:

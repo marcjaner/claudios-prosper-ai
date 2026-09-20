@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   addEdge,
   Background,
   Controls,
   Handle,
+  MarkerType,
   Position,
   ReactFlow,
   useEdgesState,
@@ -143,7 +144,21 @@ function StageNode({ id, data, selected }) {
         selected ? "border-emerald-400 ring-1 ring-emerald-200" : "border-slate-200"
       }`}
     >
-      <Handle type="target" position={Position.Left} className="!bg-emerald-500" />
+      <Handle id="in" type="target" position={Position.Left} className="!bg-emerald-500" />
+      <Handle
+        id="return-out"
+        type="source"
+        position={Position.Left}
+        style={{ top: "22%", opacity: 0, pointerEvents: "none" }}
+        isConnectable={false}
+      />
+      <Handle
+        id="return-in"
+        type="target"
+        position={Position.Right}
+        style={{ top: "22%", opacity: 0, pointerEvents: "none" }}
+        isConnectable={false}
+      />
       <div className="flex items-center gap-2">
         <StageIcon name={id} />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{id}</span>
@@ -169,7 +184,7 @@ function StageNode({ id, data, selected }) {
           )}
         </div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-emerald-500" />
+      <Handle id="out" type="source" position={Position.Right} className="!bg-emerald-500" />
     </div>
   );
 }
@@ -212,12 +227,37 @@ const toFlowNodes = (graph) =>
 const edgeLabel = (requires) => (requires.length ? requires.join(", ") : undefined);
 
 const EDGE_VISUAL = {
-  labelStyle: { fill: "#475569", fontSize: 11, fontWeight: 600 },
-  labelBgStyle: { fill: "#ffffff", stroke: "#e2e8f0" },
-  labelBgPadding: [8, 4],
-  labelBgBorderRadius: 8,
-  style: { stroke: "#94a3b8" },
+  labelStyle: { fill: "#52665d", fontSize: 10, fontWeight: 600 },
+  labelBgStyle: { fill: "#ffffff", stroke: "#e2e8e5" },
+  labelBgPadding: [7, 4],
+  labelBgBorderRadius: 5,
+  interactionWidth: 24,
 };
+
+const FORWARD_COLOR = "#6d9685";
+const RETURN_COLOR = "#98a4b3";
+
+function routeEdges(nodes, edges) {
+  const positions = new Map(nodes.map((node) => [node.id, node.position]));
+  return edges.map((edge) => {
+    const source = positions.get(edge.source);
+    const target = positions.get(edge.target);
+    const isReturn = source && target && source.x > target.x;
+    const color = edge.selected ? "#059669" : isReturn ? RETURN_COLOR : FORWARD_COLOR;
+    return {
+      ...edge,
+      sourceHandle: isReturn ? "return-out" : "out",
+      targetHandle: isReturn ? "return-in" : "in",
+      className: isReturn ? "builder-return-edge" : "builder-forward-edge",
+      markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
+      style: {
+        stroke: color,
+        strokeWidth: edge.selected ? 2 : 1.5,
+        strokeDasharray: isReturn ? "5 5" : undefined,
+      },
+    };
+  });
+}
 
 const toFlowEdges = (graph) =>
   graph.edges.map((edge) => {
@@ -285,6 +325,7 @@ export default function Builder() {
   const [revision, setRevision] = useState(null);
   const [report, setReport] = useState(null);
   const [validatedFingerprint, setValidatedFingerprint] = useState("");
+  const routedEdges = useMemo(() => routeEdges(nodes, edges), [nodes, edges]);
 
   useEffect(() => {
     Promise.all([
@@ -300,11 +341,12 @@ export default function Builder() {
   }, [setNodes, setEdges]);
 
   const onConnect = useCallback(
-    (connection) =>
+    ({ source, target }) =>
       setEdges((current) =>
         addEdge(
           {
-            ...connection,
+            source,
+            target,
             id: nextEdgeId(),
             label: edgeLabel([]),
             data: { requires: [] },
@@ -472,7 +514,7 @@ export default function Builder() {
 
   return (
     <div className="flex h-[calc(100vh-77px)]">
-      <div className="relative flex-1">
+      <div className="relative min-w-0 flex-1">
         <div className="absolute left-4 top-4 z-10 flex items-center gap-2">
           <button
             onClick={addStage}
@@ -509,9 +551,25 @@ export default function Builder() {
             </span>
           )}
         </div>
+        <div className="pointer-events-none absolute bottom-5 right-5 z-10 flex items-center gap-4 rounded-xl border border-slate-200/80 bg-white/90 px-3.5 py-2.5 text-[11px] font-medium text-slate-500">
+          <span className="flex items-center gap-2">
+            <svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true">
+              <path d="M1 5h22m-4-3 4 3-4 3" fill="none" stroke={FORWARD_COLOR} strokeWidth="1.5" />
+            </svg>
+            Avance
+          </span>
+          <span className="flex items-center gap-2">
+            <svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true">
+              <path d="M3 5h22" fill="none" stroke={RETURN_COLOR} strokeWidth="1.5" strokeDasharray="4 3" />
+              <path d="m7 2-4 3 4 3" fill="none" stroke={RETURN_COLOR} strokeWidth="1.5" />
+            </svg>
+            Retorno
+          </span>
+        </div>
         <ReactFlow
+          className="builder-flow"
           nodes={nodes}
-          edges={edges}
+          edges={routedEdges}
           nodeTypes={nodeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
