@@ -29,6 +29,50 @@ function formatDuration(call) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+const PILL = "rounded-full px-3 py-1.5 text-xs font-semibold shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2";
+
+// Escalating posts a record to the platform and ends the call, so it takes a
+// second click: the first only reveals the confirmation.
+function EscalateButton({ callId, closed }) {
+  const [status, setStatus] = useState("idle");
+
+  const escalate = async () => {
+    setStatus("escalating");
+    try {
+      const response = await fetch(`/api/calls/${encodeURIComponent(callId)}/escalate`, { method: "POST" });
+      if (!response.ok) throw new Error("escalate failed");
+      setStatus("done");
+    } catch {
+      setStatus("error");
+    }
+  };
+
+  if (status === "done") return <span className={`${PILL} bg-violet-100 text-violet-800 shadow-none`}>Escalated to staff</span>;
+  if (status === "confirm") {
+    return (
+      <span className="flex items-center gap-2">
+        <button type="button" onClick={escalate} className={`${PILL} bg-violet-600 text-white hover:bg-violet-700 focus-visible:outline-violet-600`}>
+          Confirm escalation
+        </button>
+        <button type="button" onClick={() => setStatus("idle")} className={`${PILL} border border-slate-200 bg-white text-slate-600 hover:border-slate-300 focus-visible:outline-slate-500`}>
+          Cancel
+        </button>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setStatus("confirm")}
+      disabled={closed || status === "escalating"}
+      title={closed ? "This call already has a recorded outcome" : "Record an escalation, say goodbye to the caller and end the call"}
+      className={`${PILL} border border-violet-200 bg-white text-violet-700 hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-violet-600 disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-white ${closed ? "disabled:cursor-not-allowed" : "disabled:cursor-wait"}`}
+    >
+      {status === "escalating" ? "Escalating…" : status === "error" ? "Escalation failed · retry" : "Escalate call"}
+    </button>
+  );
+}
+
 export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   const [stored, setStored] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -85,6 +129,7 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {live && <EscalateButton key={callId} callId={callId} closed={Boolean(call.outcome)} />}
           <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${live ? "bg-emerald-100 text-emerald-800" : "bg-slate-200/70 text-slate-600"}`}>
             {live ? "In progress" : "Completed"}
           </span>

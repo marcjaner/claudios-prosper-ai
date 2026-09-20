@@ -1,6 +1,8 @@
+from observability.api import mount_dashboard
 from twilio import create_app
 
 from .graph_api import register_graph_api
+from .operator import register_operator_api
 from .transcription import INITIAL_GREETING, create_transcription_agent
 from .utils import load_environment
 
@@ -11,3 +13,5 @@ load_environment()
 
 app = create_app(create_transcription_agent(), initial_greeting=INITIAL_GREETING)
 register_graph_api(app)
+register_operator_api(app)
+mount_dashboard(app)
