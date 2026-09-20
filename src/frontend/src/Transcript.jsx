@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { getActionLabel } from "./agentGraph.js";
+import { collapseTranscriptPartials } from "./transcriptEvents.js";
 
 const SPEAKERS = {
   tts: { who: "Assistant", tone: "text-emerald-700" },
@@ -57,6 +58,25 @@ function TakeoverDivider() {
         Clinic staff took over the call
       </span>
       <span className="h-px flex-1 bg-amber-200" />
+    </div>
+  );
+}
+
+function ListeningIndicator() {
+  return (
+    <div
+      role="status"
+      className="rounded-xl bg-slate-50 px-3.5 py-3 text-slate-400"
+    >
+      <p className="mb-1 text-xs font-medium">Patient</p>
+      <div className="flex items-center gap-2 text-sm italic">
+        <span>Listening</span>
+        <span aria-hidden="true" className="flex items-end gap-1">
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:-300ms] motion-reduce:animate-none" />
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:-150ms] motion-reduce:animate-none" />
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 motion-reduce:animate-none" />
+        </span>
+      </div>
     </div>
   );
 }
@@ -130,7 +150,9 @@ function ToolChip({ event, live }) {
 export default function Transcript({ events: incoming, startedAt, live }) {
   const scrollContainer = useRef(null);
   const [pinned, setPinned] = useState(true);
-  const events = incoming.filter((event) => RENDERED.has(event.kind));
+  const events = collapseTranscriptPartials(incoming, live).filter((event) =>
+    RENDERED.has(event.kind),
+  );
 
   useEffect(() => {
     if (live && pinned) {
@@ -168,7 +190,10 @@ export default function Transcript({ events: incoming, startedAt, live }) {
       {pairTools(events).map((event, index) => {
         const speaker = SPEAKERS[event.kind];
         return (
-          <div key={event.id ?? `${event.ts}-${index}`} className="flex gap-2.5 text-sm">
+          <div
+            key={event.kind === "stt_partial" ? "stt-listening" : event.id ?? `${event.ts}-${index}`}
+            className="flex gap-2.5 text-sm"
+          >
             <span className="w-9 shrink-0 pt-3 text-[11px] tabular-nums text-slate-400">
               {offset(event, startedAt)}
             </span>
@@ -177,10 +202,12 @@ export default function Transcript({ events: incoming, startedAt, live }) {
                 <GuardrailBreach event={event} />
               ) : event.kind === "operator_takeover" ? (
                 <TakeoverDivider />
+              ) : event.kind === "stt_partial" ? (
+                <ListeningIndicator />
               ) : speaker ? (
                 <div className={`rounded-xl px-3.5 py-3 ${event.kind === "tts" ? "bg-emerald-50" : "bg-slate-50"}`}>
                   <p className={`mb-1 text-xs font-medium ${speaker.tone}`}>{speaker.who}</p>
-                  <p className={`break-words leading-relaxed ${event.kind === "stt_partial" ? "text-slate-400 italic" : "text-slate-700"}`}>
+                  <p className="break-words leading-relaxed text-slate-700">
                     {event.payload.text}
                   </p>
                 </div>
