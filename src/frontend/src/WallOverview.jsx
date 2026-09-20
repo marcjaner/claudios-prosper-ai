@@ -7,6 +7,7 @@ const OUTCOMES = [
   { key: "RESCHEDULE", label: "Rescheduled", color: "bg-sky-500" },
   { key: "CANCEL", label: "Cancellations", color: "bg-violet-500" },
   { key: "REGISTER", label: "Registrations", color: "bg-amber-400" },
+  { key: "ESCALATE", label: "Transfers", color: "bg-pink-500" },
 ];
 const DEMO_OUTCOMES = { BOOK: 9, RESCHEDULE: 4, CANCEL: 3, REGISTER: 2 };
 

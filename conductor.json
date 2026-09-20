@@ -1,6 +1,6 @@
 {
   "scripts": {
     "setup": "cp \"$CONDUCTOR_ROOT_PATH/.env\" .env 2>/dev/null || true && uv sync",
-    "run": "uv run claudios-prosper-ai"
+    "run": "./run.sh"
   }
 }

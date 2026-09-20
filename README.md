@@ -26,14 +26,14 @@ selected TTS provider, and either `HELMCODE_API_KEY` or `OPENAI_API_KEY` in
 `TYPESAFE_DEFAULT_MODEL` defaults to `jev-latest`:
 
 ```shell
-PYTHONPATH=src uv run python -m agent
+./run.sh
 ```
 
 Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
-with the Prosper clinic tools, and TTS. The launcher prints the selected port;
-it uses `PORT`, then the first free Conductor workspace port, then the first
-free port starting at `7860`. The observability console is at `/` on that
-address.
+with the Prosper clinic tools, and TTS. The launcher builds the dashboard and
+starts both servers on available ports. In Conductor it prefers the workspace's
+allocated port range; elsewhere it selects free ports automatically. Open the
+frontend URL printed by the launcher.
 
 ## Production deployment (Railway)
 
@@ -53,6 +53,13 @@ public endpoint, `/ws`, and dashboard at `/` on one origin.
    `CALLS_DB=/data/calls.db` so all state stays on the mounted volume.
 5. Generate a public domain, check `https://<domain>/health`, then register
    `wss://<domain>/ws` as the integration endpoint in Prosper.
+
+The agent configuration (the stage graph the builder edits) is a JSON file at
+`AGENT_GRAPH_PATH`, defaulting to the bundled `graphs/default.json`. On a
+platform with an ephemeral filesystem (e.g. Railway), point it at a persistent
+volume — `AGENT_GRAPH_PATH=/data/graph.json` — so builder edits survive
+redeploys and restarts. An empty volume is seeded from the bundled default on
+first load.
 
 ## Twilio transport
 

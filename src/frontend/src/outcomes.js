@@ -15,7 +15,7 @@ export const OUTCOMES = {
   CANCEL: { label: "Cancelled", group: "wrote", chartColor: "#d28434" },
   REGISTER: { label: "Registered", group: "wrote", chartColor: "#30a4ad" },
   NO_ACTION: { label: "No action", group: "closed", chartColor: "#94a3b8" },
-  ESCALATE: { label: "Escalated", group: "closed", chartColor: "#9085e9" },
+  ESCALATE: { label: "Transferred", group: "closed", chartColor: "#9085e9" },
 };
 
 export const HISTORY_RANGES = [

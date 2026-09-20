@@ -11,9 +11,12 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from .tools import CLINIC_TOOL_NAMES
 
-GRAPH_PATH = Path(
-    os.getenv("AGENT_GRAPH_PATH", Path(__file__).resolve().parents[2] / "graphs" / "default.json")
-)
+# The bundled default ships in the image and is read-only in practice. Point
+# AGENT_GRAPH_PATH at a persistent volume (e.g. /data/graph.json on Railway) to
+# keep builder edits across redeploys and restarts; the volume is seeded from
+# this default on first load.
+BUNDLED_DEFAULT = Path(__file__).resolve().parents[2] / "graphs" / "default.json"
+GRAPH_PATH = Path(os.getenv("AGENT_GRAPH_PATH", BUNDLED_DEFAULT))
 
 RECORD_FACTS_TOOL = "record_facts"
 GO_TO_TOOL = "go_to"
@@ -115,7 +118,18 @@ def _first_message(exc: ValidationError) -> str:
     return str(error.get("ctx", {}).get("error") or error.get("msg", "invalid graph"))
 
 
+def _ensure_seeded(path: Path) -> None:
+    """A fresh volume is empty; seed it from the bundled default so the first
+    load — and the first time the builder opens — has a graph to show. Writes
+    through save_graph so a concurrent first load can never read a half-written
+    file."""
+    if path == BUNDLED_DEFAULT or path.exists():
+        return
+    save_graph(load_graph(BUNDLED_DEFAULT), path)
+
+
 def load_graph(path: Path = GRAPH_PATH) -> Graph:
+    _ensure_seeded(path)
     return parse_graph(json.loads(path.read_text(encoding="utf-8")))
 
 

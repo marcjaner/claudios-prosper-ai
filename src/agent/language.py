@@ -18,6 +18,7 @@ class Phrases:
     acknowledgement: str
     no_answer: str
     error: str
+    escalated: str
 
 
 PHRASES = {
@@ -27,6 +28,10 @@ PHRASES = {
         acknowledgement="Un moment, ho consulto.",
         no_answer="Perdoneu, podeu repetir què necessiteu?",
         error="Ho sento, no ho he pogut processar. Ho podeu repetir?",
+        escalated=(
+            "Passo la vostra sol·licitud a un company del centre, que us trucarà "
+            "en breu. Gràcies per la vostra trucada."
+        ),
     ),
     Language.ES: Phrases(
         name="Spanish",
@@ -34,6 +39,10 @@ PHRASES = {
         acknowledgement="Un momento, lo consulto.",
         no_answer="Perdone, ¿puede repetirme lo que necesita?",
         error="Lo siento, no he podido procesarlo. ¿Puede repetirlo?",
+        escalated=(
+            "Voy a pasar su solicitud a un compañero del centro, que le llamará "
+            "en breve. Gracias por su llamada."
+        ),
     ),
     Language.EN: Phrases(
         name="English",
@@ -41,6 +50,10 @@ PHRASES = {
         acknowledgement="One moment, let me check that.",
         no_answer="Sorry, could you tell me again what you need?",
         error="Sorry, I could not process that. Could you repeat it?",
+        escalated=(
+            "I am passing your request to a member of our staff, who will call "
+            "you back shortly. Thank you for calling."
+        ),
     ),
 }
 
