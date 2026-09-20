@@ -39,11 +39,20 @@ def get_bus() -> EventBus | None:
     return _bus
 
 
-def emit(call_id: str, kind: str, payload: dict | None = None) -> None:
+def emit(
+    call_id: str,
+    kind: str,
+    payload: dict | None = None,
+    *,
+    ts: float | None = None,
+) -> None:
     # Observability is never a reason for a call to fail, so a server running
     # without a bus (tests, the smoke scripts) silently does nothing.
     if _bus is not None:
-        _bus.emit(call_id, kind, payload)
+        if ts is None:
+            _bus.emit(call_id, kind, payload)
+        else:
+            _bus.emit(call_id, kind, payload, ts=ts)
 
 
 def update_call(call_id: str, **fields) -> None:

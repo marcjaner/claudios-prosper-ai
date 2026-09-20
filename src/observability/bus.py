@@ -41,8 +41,17 @@ class EventBus:
         self._loop: asyncio.AbstractEventLoop | None = None
         self.dropped = 0
 
-    def emit(self, call_id: str, kind: str, payload: dict | None = None) -> None:
-        self._put(Event(call_id, time.time(), kind, payload or {}))
+    def emit(
+        self,
+        call_id: str,
+        kind: str,
+        payload: dict | None = None,
+        *,
+        ts: float | None = None,
+    ) -> None:
+        self._put(
+            Event(call_id, ts if ts is not None else time.time(), kind, payload or {})
+        )
 
     def update_call(self, call_id: str, **fields) -> None:
         self._put(CallUpdate(call_id, fields))

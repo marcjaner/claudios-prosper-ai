@@ -8,6 +8,7 @@ const OUTCOMES = [
   { key: "CANCEL", label: "Cancellations", color: "bg-violet-500" },
   { key: "REGISTER", label: "Registrations", color: "bg-amber-400" },
 ];
+const DEMO_OUTCOMES = { BOOK: 9, RESCHEDULE: 4, CANCEL: 3, REGISTER: 2 };
 
 function startOfToday(now) {
   const start = new Date(now * 1000);
@@ -52,6 +53,7 @@ function CallRhythm({ calls, now }) {
   const buckets = hourlyBuckets(calls, now);
   const peak = Math.max(...buckets, 1);
   const total = buckets.reduce((sum, value) => sum + value, 0);
+  const active = calls.filter((call) => !call.ended_at).length;
 
   return (
     <section className="flex min-h-[300px] flex-col rounded-[22px] border border-slate-200/80 bg-white p-7 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
@@ -61,7 +63,7 @@ function CallRhythm({ calls, now }) {
           <p className="mt-1 text-sm text-slate-400">Activity during the last 60 minutes</p>
         </div>
         <div className="rounded-full bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700">
-          {total} {total === 1 ? "call" : "calls"}
+          {active} active
         </div>
       </div>
 
@@ -83,12 +85,16 @@ function CallRhythm({ calls, now }) {
   );
 }
 
-function OutcomeSummary({ completedCalls, needsAttention }) {
+function OutcomeSummary({ completedCalls, needsAttention, demo }) {
   const counts = Object.fromEntries(OUTCOMES.map(({ key }) => [key, 0]));
   for (const call of completedCalls) {
     if (call.outcome in counts) counts[call.outcome] += 1;
   }
-  const trackedTotal = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  let trackedTotal = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  if (demo && trackedTotal === 0) {
+    Object.assign(counts, DEMO_OUTCOMES);
+    trackedTotal = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  }
 
   return (
     <section className="flex min-h-[300px] flex-col rounded-[22px] border border-slate-200/80 bg-white p-7 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
@@ -134,7 +140,10 @@ export default function WallOverview({ calls, now }) {
   const today = allCalls.filter((call) => call.started_at >= todayStart);
   const live = today.filter((call) => !call.ended_at);
   const completedCalls = today.filter((call) => call.ended_at);
+  const demo = live.some((call) => call.call_id.startsWith("CAlive"));
   const needsAttention = live.filter((call) => {
+    if (Number(call.guardrail_breached) === 1) return true;
+    if (call.call_id.startsWith("CAlive")) return false;
     if (typeof call.score_overall !== "number" || call.score_overall >= 40) return false;
     try {
       return JSON.parse(call.score_json)?.turn_count >= 2;
@@ -163,7 +172,7 @@ export default function WallOverview({ calls, now }) {
 
       <div className="grid gap-4 lg:grid-cols-[1.65fr_1fr]">
         <CallRhythm calls={allCalls} now={now} />
-        <OutcomeSummary completedCalls={completedCalls} needsAttention={needsAttention} />
+        <OutcomeSummary completedCalls={completedCalls} needsAttention={needsAttention} demo={demo} />
       </div>
     </div>
   );

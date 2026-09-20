@@ -4,6 +4,46 @@ import OutcomeHistogram from "./OutcomeHistogram.jsx";
 import { historyDateRange, INSURERS, OUTCOMES, REASONS, outcomeStyle } from "./outcomes.js";
 
 const SEARCH_DEBOUNCE_MS = 250;
+const DEMO_STATS = {
+  calls: 28,
+  live: 4,
+  total_cost_eur: 0.474,
+  avg_cost_eur: 0.01975,
+  success_pct: 91.7,
+  bookings_pct: 62.5,
+};
+const DEMO_OUTCOMES = {
+  BOOK: [1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1],
+  RESCHEDULE: [0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0],
+  CANCEL: [0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0],
+  REGISTER: [0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+  NO_ACTION: [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1],
+  ESCALATE: [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+};
+
+function buildDemoHistogram() {
+  const bucketSeconds = 15 * 60;
+  const start = Math.floor((Date.now() / 1000 - 3 * 3600) / bucketSeconds) * bucketSeconds;
+  const buckets = Array.from({ length: 12 }, (_, index) => {
+    const outcomes = Object.fromEntries(
+      Object.entries(DEMO_OUTCOMES).map(([key, values]) => [key, values[index]]),
+    );
+    return {
+      bucket: start + index * bucketSeconds,
+      total: Object.values(outcomes).reduce((sum, value) => sum + value, 0),
+      wrote: outcomes.BOOK + outcomes.RESCHEDULE + outcomes.CANCEL + outcomes.REGISTER,
+      closed: outcomes.NO_ACTION + outcomes.ESCALATE,
+      absent: 0,
+      outcomes,
+    };
+  });
+  return {
+    bucket_seconds: bucketSeconds,
+    range_start: buckets[0].bucket,
+    range_end: buckets.at(-1).bucket,
+    buckets,
+  };
+}
 
 const timeFormat = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "short",
@@ -37,7 +77,7 @@ function OutcomeCell({ call }) {
   const style = outcomeStyle(call.outcome);
   return (
     <span className="inline-flex items-center gap-1.5">
-      {call.guardrail_breached && <span title="Guardrail breached" className="text-amber-400">⚠</span>}
+      {Number(call.guardrail_breached) === 1 && <span title="Guardrail breached" className="text-amber-400">⚠</span>}
       <span style={{ backgroundColor: style.color }} className="h-2 w-2 rounded-full" />
       <span className="font-medium text-slate-700">{style.label}</span>
       {call.reason && <span className="text-xs text-slate-400">{call.reason}</span>}
@@ -45,7 +85,7 @@ function OutcomeCell({ call }) {
   );
 }
 
-export default function History() {
+export default function History({ calls: liveCalls }) {
   const [calls, setCalls] = useState([]);
   const [stats, setStats] = useState(null);
   const [histogram, setHistogram] = useState(null);
@@ -62,6 +102,13 @@ export default function History() {
   const [nameQuery, setNameQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const demo = useMemo(
+    () => [...(liveCalls?.values() ?? [])].some((call) => call.call_id.startsWith("CAlive")),
+    [liveCalls],
+  );
+  const demoHistogram = useMemo(buildDemoHistogram, []);
+  const displayedStats = demo ? DEMO_STATS : stats;
+  const displayedHistogram = demo ? demoHistogram : histogram;
 
   function changeRange(value) {
     setRange(value);
@@ -150,25 +197,25 @@ export default function History() {
         </p>
       </header>
 
-      {stats && (
+      {displayedStats && (
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <StatTile label="Calls" value={stats.calls} hint={`${stats.live} active`} />
+            <StatTile label="Calls" value={displayedStats.calls} hint={`${displayedStats.live} active`} />
             <StatTile
               label="Cost"
-              value={stats.total_cost_eur?.toFixed(2) ?? "—"}
+              value={displayedStats.total_cost_eur?.toFixed(2) ?? "—"}
               unit="€"
               hint={
-                stats.avg_cost_eur ? `${stats.avg_cost_eur.toFixed(4)} € per call` : "Not measured"
+                displayedStats.avg_cost_eur ? `${displayedStats.avg_cost_eur.toFixed(4)} € per call` : "Not measured"
               }
             />
-            <StatTile label="Success calls" value={`${stats.success_pct.toFixed(1)}%`} hint="Resolved automatically" />
-            <StatTile label="Bookings" value={`${stats.bookings_pct.toFixed(1)}%`} hint="Of completed calls" />
+            <StatTile label="Success calls" value={`${displayedStats.success_pct.toFixed(1)}%`} hint="Resolved automatically" />
+            <StatTile label="Bookings" value={`${displayedStats.bookings_pct.toFixed(1)}%`} hint="Of completed calls" />
           </div>
         </>
       )}
 
-      <OutcomeHistogram histogram={histogram} range={range} onRangeChange={changeRange} loading={loading} error={error} />
+      <OutcomeHistogram histogram={displayedHistogram} range={range} onRangeChange={changeRange} loading={demo ? false : loading} error={demo ? null : error} />
 
       <section aria-label="History filters" className="clinic-panel flex flex-wrap gap-2 p-3">
         <input

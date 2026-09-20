@@ -53,7 +53,7 @@ CALL_FIELDS = (
     "guardrail_violations",
 )
 
-COLUMN_AFFINITY = {"score_overall": "REAL"}
+COLUMN_AFFINITY = {"score_overall": "REAL", "guardrail_breached": "INTEGER"}
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;

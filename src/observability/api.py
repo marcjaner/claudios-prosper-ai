@@ -1,3 +1,7 @@
+import asyncio
+import json
+import os
+import time
 from pathlib import Path
 
 from fastapi import (
@@ -15,6 +19,18 @@ from . import emit, subscribe, update_call
 from .bus import CallUpdate
 
 DASHBOARD_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+DEMO_LIVE_CALLS = (
+    Path(__file__).resolve().parents[2] / "scripts" / "demo_live_calls.json"
+)
+
+
+async def _mark_demo_call_for_attention(call_id: str, delay: float) -> None:
+    await asyncio.sleep(delay)
+    update_call(
+        call_id,
+        guardrail_breached=1,
+        guardrail_reason="Clinic staff review requested",
+    )
 
 
 def register_dashboard(app: FastAPI) -> None:
@@ -111,11 +127,58 @@ def register_dashboard(app: FastAPI) -> None:
     async def stop_call(request: Request, call_id: str) -> dict:
         worker = request.app.state.active_workers.get(call_id)
         if worker is None:
+            if os.getenv("DEMO_MODE") == "1" and call_id.startswith("CAlive"):
+                emit(call_id, "operator_stop", {})
+                update_call(call_id, state="ended", ended_at=time.time())
+                return {"status": "stopped", "call_id": call_id}
             raise HTTPException(status_code=409, detail="call is no longer active")
         emit(call_id, "operator_stop", {})
         update_call(call_id, state="stopping")
         await worker.cancel(reason="stopped by operator")
         return {"status": "stopping", "call_id": call_id}
+
+    @app.post("/api/demo/start")
+    async def start_demo_calls() -> dict:
+        if os.getenv("DEMO_MODE") != "1":
+            raise HTTPException(status_code=404, detail="demo mode is disabled")
+        now = time.time()
+        calls = json.loads(DEMO_LIVE_CALLS.read_text())["calls"]
+        for fixture in calls:
+            started_at = now - fixture["started_seconds_ago"]
+            fields = {
+                key: value
+                for key, value in fixture.items()
+                if key
+                not in {
+                    "call_id",
+                    "started_seconds_ago",
+                    "attention_after_seconds",
+                    "events",
+                }
+            }
+            fields.update(
+                started_at=started_at,
+                ended_at=None,
+                score_overall=None,
+                score_json=None,
+                score_error=None,
+                guardrail_breached=0,
+                guardrail_reason=None,
+                guardrail_violations=None,
+            )
+            update_call(fixture["call_id"], **fields)
+            if delay := fixture.get("attention_after_seconds"):
+                asyncio.create_task(
+                    _mark_demo_call_for_attention(fixture["call_id"], delay)
+                )
+            for event in fixture["events"]:
+                emit(
+                    fixture["call_id"],
+                    event["kind"],
+                    event["payload"],
+                    ts=started_at + event["at"],
+                )
+        return {"started": len(calls)}
 
     @app.websocket("/api/live")
     async def live(websocket: WebSocket) -> None:

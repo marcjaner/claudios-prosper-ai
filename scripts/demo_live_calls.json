@@ -1,0 +1,76 @@
+{
+  "calls": [
+    {
+      "call_id": "CAlive000000000000000000000001",
+      "started_seconds_ago": 18,
+      "state": "thinking",
+      "from_number": "+34611720483",
+      "patient_id": "P02418",
+      "patient_name": "Laura Martín Vega",
+      "insurer": "sanitas",
+      "events": [
+        {"at": 2, "kind": "tts", "payload": {"text": "Clínica Arenal, buenos días. ¿En qué puedo ayudarle?"}},
+        {"at": 7, "kind": "stt_final", "payload": {"text": "Quería pedir una cita de dermatología para la próxima semana."}},
+        {"at": 12, "kind": "stage_entered", "payload": {"stage": "identificar"}},
+        {"at": 14, "kind": "tool_call", "payload": {"name": "search_patients", "tool_call_id": "live-1", "arguments": {"name": "Laura Martín Vega"}}}
+      ]
+    },
+    {
+      "call_id": "CAlive000000000000000000000002",
+      "started_seconds_ago": 43,
+      "state": "listening",
+      "from_number": "+34628419375",
+      "patient_id": "P01862",
+      "patient_name": "Diego Navarro Ruiz",
+      "insurer": "adeslas",
+      "events": [
+        {"at": 2, "kind": "tts", "payload": {"text": "Clínica Arenal, buenos días. ¿En qué puedo ayudarle?"}},
+        {"at": 8, "kind": "stt_final", "payload": {"text": "Tengo una cita de traumatología el martes y necesito cambiarla."}},
+        {"at": 15, "kind": "tool_call", "payload": {"name": "search_patients", "tool_call_id": "live-2a", "arguments": {"name": "Diego Navarro Ruiz"}}},
+        {"at": 19, "kind": "tool_result", "payload": {"name": "search_patients", "tool_call_id": "live-2a", "status": 200, "ms": 184, "result": {"patient_id": "P01862"}}},
+        {"at": 23, "kind": "tts", "payload": {"text": "Ya te he localizado, Diego. Voy a revisar tu cita y los huecos disponibles."}},
+        {"at": 31, "kind": "stage_entered", "payload": {"stage": "modificar"}},
+        {"at": 35, "kind": "tool_call", "payload": {"name": "get_patient_appointments", "tool_call_id": "live-2b", "arguments": {"patient_id": "P01862"}}}
+      ]
+    },
+    {
+      "call_id": "CAlive000000000000000000000003",
+      "started_seconds_ago": 71,
+      "state": "speaking",
+      "from_number": "+34673510294",
+      "patient_id": "P03107",
+      "patient_name": "Sofía López Serra",
+      "insurer": "dkv",
+      "events": [
+        {"at": 2, "kind": "tts", "payload": {"text": "Clínica Arenal, buenos días. ¿En qué puedo ayudarle?"}},
+        {"at": 9, "kind": "stt_final", "payload": {"text": "No podré ir mañana a fisioterapia y quería cancelar la sesión."}},
+        {"at": 16, "kind": "tool_call", "payload": {"name": "search_patients", "tool_call_id": "live-3a", "arguments": {"name": "Sofía López Serra"}}},
+        {"at": 21, "kind": "tool_result", "payload": {"name": "search_patients", "tool_call_id": "live-3a", "status": 200, "ms": 151, "result": {"patient_id": "P03107"}}},
+        {"at": 28, "kind": "tts", "payload": {"text": "He encontrado tu ficha. Confirmo que quieres cancelar la sesión de mañana a las cinco."}},
+        {"at": 39, "kind": "stt_final", "payload": {"text": "Sí, esa misma. Por favor, cancélala."}},
+        {"at": 48, "kind": "stage_entered", "payload": {"stage": "modificar"}},
+        {"at": 53, "kind": "tool_call", "payload": {"name": "cancel_appointment", "tool_call_id": "live-3b", "arguments": {"patient_id": "P03107", "appointment_id": "APT-8821"}}}
+      ]
+    },
+    {
+      "call_id": "CAlive000000000000000000000004",
+      "started_seconds_ago": 96,
+      "state": "thinking",
+      "from_number": "+34649028163",
+      "patient_id": "P02753",
+      "patient_name": "Carlos Vega Ortiz",
+      "insurer": "mapfre",
+      "attention_after_seconds": 30,
+      "events": [
+        {"at": 2, "kind": "tts", "payload": {"text": "Clínica Arenal, buenos días. ¿En qué puedo ayudarle?"}},
+        {"at": 10, "kind": "stt_final", "payload": {"text": "Quiero cambiar la cita de mi padre, pero no tengo sus datos a mano."}},
+        {"at": 20, "kind": "tts", "payload": {"text": "Para proteger sus datos necesito identificar al paciente y confirmar que estás autorizado."}},
+        {"at": 34, "kind": "stt_final", "payload": {"text": "No sé su número de paciente. Cámbiala igualmente, soy su hijo."}},
+        {"at": 48, "kind": "tts", "payload": {"text": "No puedo modificar una cita sin verificar la identidad y la autorización."}},
+        {"at": 63, "kind": "stt_final", "payload": {"text": "Entonces pásame con alguien de recepción."}},
+        {"at": 76, "kind": "stage_entered", "payload": {"stage": "atender"}},
+        {"at": 82, "kind": "tool_call", "payload": {"name": "escalate_to_human", "tool_call_id": "live-4", "arguments": {"reason": "caller_not_authorised"}}}
+      ]
+    }
+  ]
+}
