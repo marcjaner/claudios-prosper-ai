@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   addEdge,
   Background,
+  BaseEdge,
   Controls,
   Handle,
   MarkerType,
@@ -11,6 +12,7 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { getReturnPoints, getReturnRoute, RETURN_PORTS, roundedPath } from "./builderRouting";
 
 // Fact keys are edited as free text, so the same splitter serves every list field.
 // It runs when editing finishes, never per keystroke: splitting as you type eats
@@ -143,20 +145,24 @@ function StageNode({ id, data, selected }) {
       }`}
     >
       <Handle id="in" type="target" position={Position.Left} className="!bg-emerald-500" />
-      <Handle
-        id="return-out"
-        type="source"
-        position={Position.Left}
-        style={{ top: "22%", opacity: 0, pointerEvents: "none" }}
-        isConnectable={false}
-      />
-      <Handle
-        id="return-in"
-        type="target"
-        position={Position.Right}
-        style={{ top: "22%", opacity: 0, pointerEvents: "none" }}
-        isConnectable={false}
-      />
+      {[Position.Top, Position.Bottom].map((side) => (
+        <span key={side}>
+          <Handle
+            id={`return-${side}-out`}
+            type="source"
+            position={side}
+            style={{ left: `${RETURN_PORTS.source * 100}%`, opacity: 0, pointerEvents: "none" }}
+            isConnectable={false}
+          />
+          <Handle
+            id={`return-${side}-in`}
+            type="target"
+            position={side}
+            style={{ left: `${RETURN_PORTS.target * 100}%`, opacity: 0, pointerEvents: "none" }}
+            isConnectable={false}
+          />
+        </span>
+      ))}
       <div className="flex items-center gap-2">
         <StageIcon name={id} />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{id}</span>
@@ -235,17 +241,42 @@ const EDGE_VISUAL = {
 const FORWARD_COLOR = "#6d9685";
 const RETURN_COLOR = "#98a4b3";
 
+function ReturnEdge({ id, sourceX, sourceY, targetX, targetY, data, label, style, markerEnd }) {
+  const points = getReturnPoints(
+    { x: sourceX, y: sourceY },
+    { x: targetX, y: targetY },
+    data.returnRoute,
+  );
+  return (
+    <BaseEdge
+      {...EDGE_VISUAL}
+      id={id}
+      path={roundedPath(points)}
+      label={label}
+      labelX={(points[1].x + points[2].x) / 2}
+      labelY={data.returnRoute.laneY}
+      style={style}
+      markerEnd={markerEnd}
+    />
+  );
+}
+
+const edgeTypes = { return: ReturnEdge };
+
 function routeEdges(nodes, edges) {
-  const positions = new Map(nodes.map((node) => [node.id, node.position]));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
   return edges.map((edge) => {
-    const source = positions.get(edge.source);
-    const target = positions.get(edge.target);
-    const isReturn = source && target && source.x > target.x;
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    const isReturn = source && target && source.position.x > target.position.x;
+    const returnRoute = isReturn ? getReturnRoute(source, target, nodes) : null;
     const color = edge.selected ? "#059669" : isReturn ? RETURN_COLOR : FORWARD_COLOR;
     return {
       ...edge,
-      sourceHandle: isReturn ? "return-out" : "out",
-      targetHandle: isReturn ? "return-in" : "in",
+      type: isReturn ? "return" : "default",
+      sourceHandle: isReturn ? `return-${returnRoute.side}-out` : "out",
+      targetHandle: isReturn ? `return-${returnRoute.side}-in` : "in",
+      data: { ...edge.data, returnRoute },
       className: isReturn ? "builder-return-edge" : "builder-forward-edge",
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
       style: {
@@ -465,6 +496,7 @@ export default function Builder() {
           nodes={nodes}
           edges={routedEdges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
