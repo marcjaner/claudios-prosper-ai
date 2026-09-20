@@ -33,7 +33,8 @@ Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
 with the Prosper clinic tools, and TTS. The launcher builds the dashboard and
 starts both servers on available ports. In Conductor it prefers the workspace's
 allocated port range; elsewhere it selects free ports automatically. Open the
-frontend URL printed by the launcher.
+frontend URL printed by the launcher. See [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
+for how to use the console.
 
 ## Production deployment (Railway)
 
