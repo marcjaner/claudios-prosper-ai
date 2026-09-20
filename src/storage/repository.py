@@ -25,6 +25,9 @@ DEFAULT_GUARDRAILS = [
     ("Use real availability", "Only offer appointment times returned by the clinic system. Never invent availability, providers, or policies."),
     ("Escalate when needed", "Escalate urgent, unsafe, or out-of-scope requests to a human instead of guessing."),
 ]
+# Written by the dashboard, read by the agent on every turn — like guardrails,
+# but for one call.
+STAFF_INSTRUCTION_EVENT = "staff_instruction"
 
 
 class CallRepository:
@@ -188,6 +191,18 @@ class CallRepository:
                 .order_by(CallEvent.id)
             )
             return list(result)
+
+    async def staff_instructions(self, call_id: str) -> list[str]:
+        async with self.database.session() as session:
+            payloads = await session.scalars(
+                select(CallEvent.payload)
+                .where(
+                    CallEvent.call_id == call_id,
+                    CallEvent.event_type == STAFF_INSTRUCTION_EVENT,
+                )
+                .order_by(CallEvent.id)
+            )
+            return [payload["text"] for payload in payloads]
 
     async def memory_for_call(self, call_id: str) -> str:
         events = await self.events_for_call(call_id)

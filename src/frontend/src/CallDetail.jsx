@@ -123,6 +123,59 @@ function AttentionWarning({ callId, reason }) {
   );
 }
 
+// The agent reads staff instructions on the caller's next turn, so sending one
+// never interrupts anybody; the echo is the "Clinic staff" bubble in the transcript.
+function StaffInstruction({ callId }) {
+  const [text, setText] = useState("");
+  const [status, setStatus] = useState("idle");
+
+  const send = async (event) => {
+    event.preventDefault();
+    const trimmed = text.trim();
+    if (!trimmed || status === "sending") return;
+    setStatus("sending");
+    try {
+      const response = await fetch(`/api/calls/${callId}/instructions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: trimmed }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setText("");
+      setStatus("idle");
+    } catch {
+      setStatus("error");
+    }
+  };
+
+  return (
+    <form onSubmit={send} className="border-t border-slate-100 px-4 py-3">
+      <label htmlFor={`instruction-${callId}`} className="text-xs font-medium text-violet-700">
+        Instruct the agent
+      </label>
+      <div className="mt-1.5 flex gap-2">
+        <input
+          id={`instruction-${callId}`}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="e.g. Only offer afternoon slots"
+          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
+        />
+        <button
+          type="submit"
+          disabled={!text.trim() || status === "sending"}
+          className={`${PILL} bg-violet-600 text-white hover:bg-violet-700 focus-visible:outline-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400`}
+        >
+          {status === "sending" ? "Sending…" : "Send to agent"}
+        </button>
+      </div>
+      <p className={`mt-1.5 text-[11px] ${status === "error" ? "text-rose-600" : "text-slate-400"}`}>
+        {status === "error" ? "Could not send: the call may have ended." : "Applied on the patient's next turn."}
+      </p>
+    </form>
+  );
+}
+
 export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
   const [stored, setStored] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -259,6 +312,7 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
           <div className="min-h-0 flex-1 p-4">
             <Transcript events={events} startedAt={call.started_at} live={live} />
           </div>
+          {live && call.state !== "operator" && <StaffInstruction key={callId} callId={callId} />}
         </section>
       </div>
     </main>

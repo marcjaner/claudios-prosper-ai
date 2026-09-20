@@ -43,6 +43,9 @@ class FakeRepository:
     async def list_guardrails(self):
         return []
 
+    async def staff_instructions(self, _call_id):
+        return []
+
     async def append_event(self, call_id, event_type, payload):
         self.events.append((call_id, event_type, payload))
 
