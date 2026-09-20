@@ -12,7 +12,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { PromptActions, RevisionPanel, SparklesIcon, ValidationPanel } from "./PromptReview.jsx";
+import { PromptActions, RevisionPanel, SparklesIcon, ValidationDrawer } from "./PromptReview.jsx";
 
 // Fact keys are edited as free text, so the same splitter serves every list field.
 // It runs when editing finishes, never per keystroke: splitting as you type eats
@@ -320,6 +320,7 @@ export default function Builder() {
   const [draftKeys, setDraftKeys] = useState(null);
   // The stage name reads as a title; editing is opt-in behind the pencil.
   const [editingName, setEditingName] = useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [aiJob, setAiJob] = useState("");
   const [aiError, setAiError] = useState("");
   const [revision, setRevision] = useState(null);
@@ -431,6 +432,7 @@ export default function Builder() {
   };
 
   const navigateToSource = (source) => {
+    setIsInspectorOpen(true);
     if (source.kind === "system") {
       setSelected(null);
       return;
@@ -511,9 +513,10 @@ export default function Builder() {
 
   const node = selected?.kind === "node" ? nodes.find((item) => item.id === selected.id) : null;
   const edge = selected?.kind === "edge" ? edges.find((item) => item.id === selected.id) : null;
+  const inspectorLabel = node ? "Etapa" : edge ? "Transición" : "Configuración";
 
   return (
-    <div className="flex h-[calc(100vh-77px)]">
+    <div className="relative flex h-[calc(100vh-77px)] overflow-hidden">
       <div className="relative min-w-0 flex-1">
         <div className="absolute left-4 top-4 z-10 flex items-center gap-2">
           <button
@@ -529,6 +532,14 @@ export default function Builder() {
           >
             Eliminar
           </button>
+          {!isInspectorOpen && (
+            <button
+              onClick={() => setIsInspectorOpen(true)}
+              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition-colors hover:border-slate-300"
+            >
+              Abrir panel
+            </button>
+          )}
           <button
             onClick={() => validate("agent")}
             disabled={Boolean(aiJob)}
@@ -579,11 +590,13 @@ export default function Builder() {
             setDraftKeys(null);
             setEditingName(false);
             setSelected({ kind: "node", id: clicked.id });
+            setIsInspectorOpen(true);
           }}
           onEdgeClick={(_, clicked) => {
             setDraftKeys(null);
             setEditingName(false);
             setSelected({ kind: "edge", id: clicked.id });
+            setIsInspectorOpen(true);
           }}
           onPaneClick={() => {
             setEditingName(false);
@@ -597,8 +610,33 @@ export default function Builder() {
         </ReactFlow>
       </div>
 
-      <aside className="w-96 overflow-y-auto border-l border-slate-200 bg-white p-5">
-        <div aria-live="polite">
+      {report && (
+        <ValidationDrawer
+          report={report}
+          isStale={validatedFingerprint !== graphFingerprint}
+          isInspectorOpen={isInspectorOpen}
+          onClose={() => setReport(null)}
+          onNavigate={navigateToSource}
+        />
+      )}
+
+      {isInspectorOpen && (
+        <aside className="relative z-30 flex w-96 shrink-0 flex-col border-l border-slate-200 bg-white">
+          <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-100 px-5">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              {inspectorLabel}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsInspectorOpen(false)}
+              aria-label="Cerrar panel de edición"
+              className="grid h-8 w-8 place-items-center rounded-lg text-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            >
+              ×
+            </button>
+          </header>
+          <div className="flex-1 overflow-y-auto p-5">
+            <div aria-live="polite">
           {aiJob && (
             <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 text-xs font-medium text-emerald-700">
               <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
@@ -608,15 +646,7 @@ export default function Builder() {
           {aiError && (
             <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">{aiError}</div>
           )}
-        </div>
-        {report && (
-          <ValidationPanel
-            report={report}
-            isStale={validatedFingerprint !== graphFingerprint}
-            onClose={() => setReport(null)}
-            onNavigate={navigateToSource}
-          />
-        )}
+            </div>
         {!selected && (
           <div className="space-y-4">
             <div>
@@ -822,7 +852,9 @@ export default function Builder() {
             </label>
           </div>
         )}
-      </aside>
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
