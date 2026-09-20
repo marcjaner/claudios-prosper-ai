@@ -74,7 +74,7 @@ export default function App() {
           ))}
         </nav>
         <div className="flex items-center justify-self-end gap-3">
-          <DemoCall />
+          {(view !== "#/builder" || live.length > 0) && <DemoCall />}
           <div className="text-right">
             <p className="text-xl font-semibold tabular-nums text-emerald-600">{live.length}</p>
             <p className="text-xs text-slate-400">active</p>
