@@ -120,11 +120,12 @@ def _first_message(exc: ValidationError) -> str:
 
 def _ensure_seeded(path: Path) -> None:
     """A fresh volume is empty; seed it from the bundled default so the first
-    load — and the first time the builder opens — has a graph to show."""
+    load — and the first time the builder opens — has a graph to show. Writes
+    through save_graph so a concurrent first load can never read a half-written
+    file."""
     if path == BUNDLED_DEFAULT or path.exists():
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(BUNDLED_DEFAULT.read_text(encoding="utf-8"), encoding="utf-8")
+    save_graph(load_graph(BUNDLED_DEFAULT), path)
 
 
 def load_graph(path: Path = GRAPH_PATH) -> Graph:
