@@ -54,6 +54,13 @@ public endpoint, `/ws`, and dashboard at `/` on one origin.
 5. Generate a public domain, check `https://<domain>/health`, then register
    `wss://<domain>/ws` as the integration endpoint in Prosper.
 
+The agent configuration (the stage graph the builder edits) is a JSON file at
+`AGENT_GRAPH_PATH`, defaulting to the bundled `graphs/default.json`. On a
+platform with an ephemeral filesystem (e.g. Railway), point it at a persistent
+volume — `AGENT_GRAPH_PATH=/data/graph.json` — so builder edits survive
+redeploys and restarts. An empty volume is seeded from the bundled default on
+first load.
+
 ## Twilio transport
 
 `src/twilio/` is the WebSocket server the harness dials. It owns the wire and
