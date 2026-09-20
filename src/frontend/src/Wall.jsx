@@ -27,7 +27,7 @@ const TOOL_ACTIONS = {
   reschedule_appointment: "Rescheduling an appointment",
   cancel_appointment: "Cancelling an appointment",
   submit_no_action: "Closing the request",
-  escalate_to_human: "Escalating to clinic staff",
+  escalate_to_human: "Transferring to clinic staff",
 };
 
 const STAGE_ACTIONS = {

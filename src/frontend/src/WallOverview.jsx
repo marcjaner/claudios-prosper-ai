@@ -7,6 +7,7 @@ const OUTCOMES = [
   { key: "RESCHEDULE", label: "Rescheduled", color: "bg-sky-500" },
   { key: "CANCEL", label: "Cancellations", color: "bg-violet-500" },
   { key: "REGISTER", label: "Registrations", color: "bg-amber-400" },
+  { key: "ESCALATE", label: "Transfers", color: "bg-pink-500" },
 ];
 
 function startOfToday(now) {
