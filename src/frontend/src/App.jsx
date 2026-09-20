@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import Builder from "./Builder.jsx";
 import CallDetail from "./CallDetail.jsx";
+import DemoCall from "./DemoCall.jsx";
 import History from "./History.jsx";
 import Wall from "./Wall.jsx";
 import Guardrails from "./Guardrails.jsx";
@@ -73,6 +74,7 @@ export default function App() {
           ))}
         </nav>
         <div className="flex items-center justify-self-end gap-3">
+          <DemoCall />
           <div className="text-right">
             <p className="text-xl font-semibold tabular-nums text-emerald-600">{live.length}</p>
             <p className="text-xs text-slate-400">active</p>

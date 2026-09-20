@@ -51,7 +51,7 @@ npm run dev -- --host 0.0.0.0 --force --strictPort &
 FRONTEND_PID=$!
 
 echo
-echo "Frontend: http://localhost:5173/app/"
+echo "Frontend: http://localhost:5173/"
 echo "Backend:  http://localhost:7860/"
 echo "Press Ctrl+C to stop both servers."
 echo
