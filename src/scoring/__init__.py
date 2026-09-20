@@ -8,6 +8,10 @@ from .jev import (
     run_scoring_worker,
     score_conversation,
 )
+from .patient_satisfaction import (
+    evaluate_patient_satisfaction,
+    run_patient_satisfaction_worker,
+)
 
 __all__ = [
     "DEFAULT_MODEL",
@@ -16,6 +20,8 @@ __all__ = [
     "SPOKEN_KINDS",
     "build_state",
     "classify_guardrail_breach",
+    "evaluate_patient_satisfaction",
+    "run_patient_satisfaction_worker",
     "run_scoring_worker",
     "score_conversation",
 ]

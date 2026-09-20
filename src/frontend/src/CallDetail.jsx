@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import AgentActions from "./AgentActionGraph.jsx";
 import { StaffBadge } from "./History.jsx";
+import { PatientSatisfactionDetail } from "./PatientSatisfaction.jsx";
 import StageTrace from "./StageTrace.jsx";
 import Transcript from "./Transcript.jsx";
 import { getActionReason } from "./agentGraph.js";
@@ -201,38 +202,47 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
       {attention && <AttentionWarning key={callId} callId={callId} reason={attentionReason} />}
 
       <aside aria-label="Patient information" className="clinic-panel min-w-0 shrink-0 p-5">
-        <div className="flex items-start justify-between gap-3">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.8fr)]">
           <div className="min-w-0">
-            <p className="text-xs text-slate-400">Patient</p>
-            <h2 className="mt-0.5 break-words text-xl font-semibold tracking-tight text-slate-950">
-              {call.patient_name ?? "Unidentified caller"}
-            </h2>
-          </div>
-          <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
-            {call.insurer ?? "Insurer unknown"}
-          </span>
-        </div>
-        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
-          <Field label="Patient ID">{call.patient_id}</Field>
-          <Field label="Caller">{call.from_number ?? "Hidden"}</Field>
-          <Field label="Started">{timeFormat.format(new Date(call.started_at * 1000))}</Field>
-          <Field label="Duration">{formatDuration(call)}</Field>
-          <Field label="First response">{call.ttfa_seconds != null ? `${call.ttfa_seconds.toFixed(2)} s` : null}</Field>
-          <Field label="Cost">{call.cost_eur != null ? `${call.cost_eur.toFixed(4)} €` : null}</Field>
-        </dl>
-        {call.pricing && (
-          <div className="mt-4 rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-600">
-            <p className="font-semibold text-slate-800">Estimated provider cost</p>
-            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
-              <span>LLM ${(call.pricing.llm_usd ?? 0).toFixed(6)}</span>
-              <span>STT ${(call.pricing.stt_usd ?? 0).toFixed(6)}</span>
-              <span>TTS ${(call.pricing.tts_usd ?? 0).toFixed(6)}</span>
-              <span>JEV ${(call.pricing.jev_usd ?? 0).toFixed(6)}</span>
-              <span className="font-semibold text-slate-800">Total ${(call.pricing.total_usd ?? 0).toFixed(6)}</span>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs text-slate-400">Patient</p>
+                <h2 className="mt-0.5 break-words text-xl font-semibold tracking-tight text-slate-950">
+                  {call.patient_name ?? "Unidentified caller"}
+                </h2>
+              </div>
+              <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
+                {call.insurer ?? "Insurer unknown"}
+              </span>
             </div>
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+              <Field label="Patient ID">{call.patient_id}</Field>
+              <Field label="Caller">{call.from_number ?? "Hidden"}</Field>
+              <Field label="Started">{timeFormat.format(new Date(call.started_at * 1000))}</Field>
+              <Field label="Duration">{formatDuration(call)}</Field>
+              <Field label="First response">{call.ttfa_seconds != null ? `${call.ttfa_seconds.toFixed(2)} s` : null}</Field>
+              <Field label="Cost">{call.cost_eur != null ? `${call.cost_eur.toFixed(4)} €` : null}</Field>
+            </dl>
+            {call.pricing && (
+              <div className="mt-4 rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                <p className="font-semibold text-slate-800">Estimated provider cost</p>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
+                  <span>LLM ${(call.pricing.llm_usd ?? 0).toFixed(6)}</span>
+                  <span>STT ${(call.pricing.stt_usd ?? 0).toFixed(6)}</span>
+                  <span>TTS ${(call.pricing.tts_usd ?? 0).toFixed(6)}</span>
+                  <span>JEV ${(call.pricing.jev_usd ?? 0).toFixed(6)}</span>
+                  <span className="font-semibold text-slate-800">Total ${(call.pricing.total_usd ?? 0).toFixed(6)}</span>
+                </div>
+              </div>
+            )}
+            {call.error && <p className="mt-3 break-words rounded-xl bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">{call.error}</p>}
           </div>
-        )}
-        {call.error && <p className="mt-3 break-words rounded-xl bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">{call.error}</p>}
+          <PatientSatisfactionDetail
+            events={events}
+            startedAt={call.started_at}
+            endedAt={call.ended_at}
+          />
+        </div>
       </aside>
 
       <div className="call-detail-panels grid min-h-0 gap-4 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] xl:overflow-hidden">

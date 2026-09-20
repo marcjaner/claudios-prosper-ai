@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { PatientSatisfactionCard } from "./PatientSatisfaction.jsx";
 import WallOverview from "./WallOverview.jsx";
 import { alertReason, needsAttention, parseScore } from "./alertReason.js";
 import { useOperatorLine } from "./useOperatorLine.js";
@@ -237,6 +238,7 @@ function CallCard({ call, events, now }) {
         <div className={`mt-4 rounded-xl px-3.5 py-3 ${alert || onLine || heldElsewhere ? "bg-white/70" : "bg-slate-50"}`}>
           <p className="text-xs text-slate-400">Current task</p>
           <p className="mt-0.5 truncate text-sm font-semibold text-slate-700">{action}</p>
+          <PatientSatisfactionCard events={events} />
         </div>
       </a>
       {onLine && <OperatorFooter phase={linePhase} onHangUp={hangUp} />}
