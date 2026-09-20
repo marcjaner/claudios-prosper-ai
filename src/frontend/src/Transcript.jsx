@@ -8,7 +8,10 @@ const SPEAKERS = {
   llm: { who: "Reasoning", tone: "text-slate-500" },
   stt_final: { who: "Patient", tone: "text-slate-600" },
   stt_partial: { who: "Patient", tone: "text-slate-400" },
+  staff_instruction: { who: "Clinic staff", tone: "text-violet-700" },
 };
+
+const BUBBLES = { tts: "bg-emerald-50", staff_instruction: "bg-violet-50" };
 
 /** A request and its response are one thing that happened, so show one chip. */
 function pairTools(events) {
@@ -205,7 +208,7 @@ export default function Transcript({ events: incoming, startedAt, live }) {
               ) : event.kind === "stt_partial" ? (
                 <ListeningIndicator />
               ) : speaker ? (
-                <div className={`rounded-xl px-3.5 py-3 ${event.kind === "tts" ? "bg-emerald-50" : "bg-slate-50"}`}>
+                <div className={`rounded-xl px-3.5 py-3 ${BUBBLES[event.kind] ?? "bg-slate-50"}`}>
                   <p className={`mb-1 text-xs font-medium ${speaker.tone}`}>{speaker.who}</p>
                   <p className="break-words leading-relaxed text-slate-700">
                     {event.payload.text}

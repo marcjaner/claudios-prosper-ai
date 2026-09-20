@@ -22,6 +22,9 @@ class FakeRepository:
     async def list_guardrails(self):
         return []
 
+    async def staff_instructions(self, _call_id):
+        return []
+
     async def append_event(self, *_args):
         return None
 
