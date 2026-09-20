@@ -56,6 +56,17 @@ CALL_FIELDS = (
 
 COLUMN_AFFINITY = {"score_overall": "REAL"}
 
+# Reference prices supplied for the hackathon cost view. USD is used because
+# the provider prices are quoted in USD; the existing cost_eur column remains
+# populated for backwards compatibility.
+LLM_INPUT_USD_PER_MILLION = 0.20
+LLM_OUTPUT_USD_PER_MILLION = 1.20
+DEEPGRAM_STT_USD_PER_MINUTE = 0.0043
+CARTESIA_TTS_USD_PER_MINUTE = 0.033
+JEV_INPUT_USD_PER_MILLION = 0.042
+CHARS_PER_TOKEN = 4
+SPOKEN_CHARS_PER_SECOND = 15
+
 SCHEMA = """
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
@@ -91,6 +102,21 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS events_call_idx ON events(call_id, id);
+
+CREATE TABLE IF NOT EXISTS call_pricing (
+    call_id TEXT PRIMARY KEY REFERENCES calls(call_id),
+    llm_usd REAL NOT NULL DEFAULT 0,
+    stt_usd REAL NOT NULL DEFAULT 0,
+    tts_usd REAL NOT NULL DEFAULT 0,
+    jev_usd REAL NOT NULL DEFAULT 0,
+    total_usd REAL NOT NULL DEFAULT 0,
+    llm_input_tokens REAL NOT NULL DEFAULT 0,
+    llm_output_tokens REAL NOT NULL DEFAULT 0,
+    stt_audio_minutes REAL NOT NULL DEFAULT 0,
+    tts_audio_minutes REAL NOT NULL DEFAULT 0,
+    jev_input_tokens REAL NOT NULL DEFAULT 0,
+    estimated_at REAL NOT NULL
+);
 """
 
 
@@ -134,9 +160,63 @@ class Store:
                 elif item.kind not in BROADCAST_ONLY:
                     self._insert_event(item)
             self._writer.execute("COMMIT")
+            for call_id in {
+                item.call_id for item in batch if isinstance(item, (Event, CallUpdate))
+            }:
+                self._recalculate_pricing(call_id)
         except Exception:
             self._writer.execute("ROLLBACK")
             raise
+
+    def _recalculate_pricing(self, call_id: str) -> None:
+        events = self._writer.execute(
+            "SELECT kind, payload_json FROM events WHERE call_id = ?", (call_id,)
+        ).fetchall()
+        llm_input = llm_output = 0
+        stt_chars = tts_chars = 0
+        for kind, payload_json in events:
+            payload = json.loads(payload_json)
+            if kind == "llm_call":
+                llm_input += payload.get("prompt_tokens") or payload.get("prompt_chars", 0) / CHARS_PER_TOKEN
+                llm_output += payload.get("completion_tokens") or 0
+            elif kind == "stt_final":
+                stt_chars += len(payload.get("text", ""))
+            elif kind == "tts":
+                tts_chars += len(payload.get("text", ""))
+
+        call = self._writer.execute(
+            "SELECT score_overall, score_json FROM calls WHERE call_id = ?", (call_id,)
+        ).fetchone()
+        spoken_chars = stt_chars + tts_chars
+        jev_tokens = 0
+        if call and call[0] is not None:
+            jev_tokens = spoken_chars / CHARS_PER_TOKEN
+            if call[1]:
+                try:
+                    jev_tokens += len(json.loads(call[1]).get("guardrail_violations", [])) * spoken_chars / CHARS_PER_TOKEN
+                except (TypeError, json.JSONDecodeError):
+                    pass
+
+        llm_usd = llm_input / 1_000_000 * LLM_INPUT_USD_PER_MILLION + llm_output / 1_000_000 * LLM_OUTPUT_USD_PER_MILLION
+        stt_minutes = stt_chars / SPOKEN_CHARS_PER_SECOND / 60
+        tts_minutes = tts_chars / SPOKEN_CHARS_PER_SECOND / 60
+        stt_usd = stt_minutes * DEEPGRAM_STT_USD_PER_MINUTE
+        tts_usd = tts_minutes * CARTESIA_TTS_USD_PER_MINUTE
+        jev_usd = jev_tokens / 1_000_000 * JEV_INPUT_USD_PER_MILLION
+        total_usd = llm_usd + stt_usd + tts_usd + jev_usd
+        self._writer.execute(
+            "INSERT INTO call_pricing (call_id, llm_usd, stt_usd, tts_usd, jev_usd, total_usd, "
+            "llm_input_tokens, llm_output_tokens, stt_audio_minutes, tts_audio_minutes, "
+            "jev_input_tokens, estimated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(call_id) DO UPDATE SET llm_usd=excluded.llm_usd, stt_usd=excluded.stt_usd, "
+            "tts_usd=excluded.tts_usd, jev_usd=excluded.jev_usd, total_usd=excluded.total_usd, "
+            "llm_input_tokens=excluded.llm_input_tokens, llm_output_tokens=excluded.llm_output_tokens, "
+            "stt_audio_minutes=excluded.stt_audio_minutes, tts_audio_minutes=excluded.tts_audio_minutes, "
+            "jev_input_tokens=excluded.jev_input_tokens, estimated_at=excluded.estimated_at",
+            (call_id, llm_usd, stt_usd, tts_usd, jev_usd, total_usd, llm_input, llm_output,
+             stt_minutes, tts_minutes, jev_tokens, time.time()),
+        )
+        self._writer.execute("UPDATE calls SET cost_eur = ? WHERE call_id = ?", (total_usd * 0.92, call_id))
 
     def _insert_event(self, event: Event) -> None:
         self._writer.execute(
@@ -378,7 +458,14 @@ class Store:
             row = connection.execute(
                 "SELECT * FROM calls WHERE call_id = ?", (call_id,)
             ).fetchone()
-        return dict(row) if row else None
+            pricing = connection.execute(
+                "SELECT * FROM call_pricing WHERE call_id = ?", (call_id,)
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["pricing"] = dict(pricing) if pricing else None
+        return result
 
     def get_events(self, call_id: str) -> list[dict]:
         with self._read() as connection:

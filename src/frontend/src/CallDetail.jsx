@@ -220,6 +220,18 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
           <Field label="First response">{call.ttfa_seconds != null ? `${call.ttfa_seconds.toFixed(2)} s` : null}</Field>
           <Field label="Cost">{call.cost_eur != null ? `${call.cost_eur.toFixed(4)} €` : null}</Field>
         </dl>
+        {call.pricing && (
+          <div className="mt-4 rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-600">
+            <p className="font-semibold text-slate-800">Estimated provider cost</p>
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
+              <span>LLM ${(call.pricing.llm_usd ?? 0).toFixed(6)}</span>
+              <span>STT ${(call.pricing.stt_usd ?? 0).toFixed(6)}</span>
+              <span>TTS ${(call.pricing.tts_usd ?? 0).toFixed(6)}</span>
+              <span>JEV ${(call.pricing.jev_usd ?? 0).toFixed(6)}</span>
+              <span className="font-semibold text-slate-800">Total ${(call.pricing.total_usd ?? 0).toFixed(6)}</span>
+            </div>
+          </div>
+        )}
         {call.error && <p className="mt-3 break-words rounded-xl bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">{call.error}</p>}
       </aside>
 
