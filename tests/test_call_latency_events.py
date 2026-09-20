@@ -377,7 +377,7 @@ def test_tool_failure_is_reported_safely_and_the_turn_still_answers(monkeypatch)
     assert finished.error_message == "Tool execution failed"
     assert "secret" not in finished.error_message
     assert [response.immediate_answer for response in replies] == [
-        "Let me check.",
+        "One moment, let me check that.",
         "Sorry, I could not look that up.",
     ]
     tool_result = next(

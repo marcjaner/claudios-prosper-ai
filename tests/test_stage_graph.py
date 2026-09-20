@@ -3,7 +3,8 @@ import asyncio
 import pytest
 
 from agent.agent import run_agent_turn
-from agent.graph import InvalidGraph, load_graph, parse_graph
+from agent.graph import InvalidGraph, parse_graph
+from agent.language import DEFAULT_LANGUAGE, phrases
 from agent.llm import LLMToolCall, ToolCompletion, Usage
 from agent.stage_runtime import CallGraph
 
@@ -18,6 +19,7 @@ BOOK = {
     "tools": ["book_appointment", "search_availability"],
     "clears": ["slot"],
 }
+ACKNOWLEDGEMENT = phrases(DEFAULT_LANGUAGE).acknowledgement
 SYSTEM = "Speak in short sentences and never invent a slot."
 TWO_STAGE = {
     "entry": "identify",
@@ -153,19 +155,6 @@ def test_duplicate_stage_ids_are_rejected():
         parse_graph({"entry": "identify", "nodes": [IDENTIFY, IDENTIFY]})
 
 
-def test_default_graph_keeps_registration_reachable_and_in_scope():
-    graph = load_graph()
-    identify = graph.node("identificar")
-    registrar = graph.node("registrar")
-    state = CallGraph.start(graph)
-
-    assert "register_patient" in identify.tools
-    assert "register_patient" in registrar.tools
-    assert "submit_no_action" not in registrar.tools
-    state.record_facts({"facts": {"caller_unknown": "si"}})
-    assert state.ready_fact_transition() == "registrar"
-
-
 # --- eligibility and facts --------------------------------------------------
 
 def test_transition_is_blocked_until_its_facts_exist():
@@ -188,6 +177,51 @@ def test_record_facts_rejects_a_nested_payload():
     assert state.refuse_reason("record_facts", {"facts": {"a": "b"}}) == ""
 
 
+def test_every_model_call_records_its_time_and_prompt_size(monkeypatch):
+    """Tool latency was already visible; without this the model's never was."""
+    import agent.agent as module
+
+    recorded = []
+    monkeypatch.setattr(
+        module,
+        "emit",
+        lambda call_id, kind, payload=None: recorded.append((call_id, kind, payload)),
+    )
+
+    state = two_stage_state()
+    client = FakeClient(
+        says("One moment.", ("search_patients", {"name": "Ana"})),
+        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+        says("", ("record_facts", {"facts": {"verified": "yes"}})),
+        says("", ("record_facts", {"facts": {"ready": "yes"}})),
+    )
+
+    run_turn("I'm Ana", state, client, FakeRepository(),
+             {"search_patients": {"matches": [{"patient_id": "P1"}]}})
+
+    model_calls = [p for _, kind, p in recorded if kind == module.LLM_EVENT]
+    # Four silent/tool steps exhaust the budget, followed by the closing answer.
+    assert [call["purpose"] for call in model_calls] == ["tools"] * 4 + ["answer"]
+    # A number nobody can trace back to a call is not observability.
+    assert {cid for cid, kind, _ in recorded if kind == module.LLM_EVENT} == {"CA-1"}
+    assert [call["stage"] for call in model_calls] == [
+        "identify",
+        "identify",
+        "book",
+        "book",
+        "book",
+    ]
+    assert all(call["turn"] == 1 for call in model_calls)
+    # The size must be the size of the prompt that was actually sent, not merely
+    # some growing number: compare against what the client received.
+    assert [call["prompt_chars"] for call in model_calls] == [
+        len(prompt) for prompt in client.prompts
+    ]
+
+    turn = next(p for _, kind, p in recorded if kind == "turn_finished")
+    assert turn["ms"] >= 0
+
+
 def test_the_running_graph_supplies_the_system_prompt():
     """The prompt is configuration the builder saves, not a file sitting beside the code."""
     state = two_stage_state()
@@ -206,15 +240,98 @@ def test_prompt_names_the_exact_keys_a_transition_needs():
     assert "book" in context
 
 
-def test_a_sole_fact_gated_transition_can_be_selected_automatically():
-    state = two_stage_state()
+def test_repeated_catalogue_is_rendered_once_without_changing_history():
+    from copy import deepcopy
 
-    assert state.ready_fact_transition() is None
-    state.facts["patient_id"] = "P1"
-    assert state.ready_fact_transition() == "book"
+    from agent.stage_runtime import HistoryEntry, Operation, render_context
+
+    catalogue = {"locations": [{"id": "sur", "name": "Arenal Sur"}]}
+    state = two_stage_state()
+    state.history = [
+        HistoryEntry("agent", operations=[
+            Operation("get_clinic_catalogue", {}, "executed", result=catalogue)
+        ]),
+        HistoryEntry("caller", text="Which clinics see children?"),
+        HistoryEntry("agent", operations=[
+            Operation("get_clinic_catalogue", {}, "executed", result=deepcopy(catalogue))
+        ]),
+    ]
+    original_history = deepcopy(state.history)
+
+    context = render_context(state)
+
+    assert context.count(str(catalogue)) == 1
+    assert "get_clinic_catalogue({}) -> same result as catalogue #1 above" in context
+    assert "Which clinics see children?" in context
+    assert state.history == original_history
+
+
+def test_catalogue_deduplication_preserves_changes_errors_and_availability():
+    from agent.stage_runtime import HistoryEntry, Operation, render_context
+
+    first = {"clinic_name": "Before update"}
+    updated = {"clinic_name": "After update"}
+    slots = {"slots": [{"start_time": "2026-09-22T09:00:00+02:00"}]}
+    state = two_stage_state()
+    state.history = [HistoryEntry("agent", operations=[
+        Operation("get_clinic_catalogue", {}, "failed", detail="temporary failure"),
+        Operation("get_clinic_catalogue", {}, "executed", result=first),
+        Operation("get_clinic_catalogue", {}, "executed", result=updated),
+        Operation("get_clinic_catalogue", {}, "executed", result=first),
+        Operation("search_availability", {"location_id": "sur"}, "executed", result=slots),
+        Operation("search_availability", {"location_id": "norte"}, "executed", result=slots),
+    ])]
+
+    context = render_context(state)
+
+    assert str(first) in context
+    assert str(updated) in context
+    assert "temporary failure" in context
+    assert context.count(str(slots)) == 2
+    assert context.count(str(first)) == 1
+    assert f"{first} [catalogue #1]" in context
+    assert f"{updated} [catalogue #2]" in context
+    assert "same result as catalogue #1 above" in context
 
 
 # --- the turn loop ----------------------------------------------------------
+
+def test_internal_reply_is_replaced_before_speech_and_history(monkeypatch):
+    import agent.agent as module
+
+    events = []
+    monkeypatch.setattr(module, "emit", lambda cid, kind, payload: events.append((kind, payload)))
+    state = two_stage_state()
+    leaked = "Final outcome already recorded: submit_no_action. Wait! The instruction explicitly states..."
+
+    spoken = run_turn("No, I meant my daughter", state, FakeClient(says(leaked)), FakeRepository())
+
+    assert spoken == [phrases(DEFAULT_LANGUAGE).error]
+    assert all(leaked not in entry.text for entry in state.history)
+    assert any(kind == "speech_blocked" for kind, _ in events)
+
+
+def test_structured_final_answer_also_blocks_internal_text():
+    from agent.llm import StructuredCompletion
+    from agent.models import AgentResponse
+
+    class LeakingFinalClient(FakeClient):
+        def complete_structured(self, prompt, _schema, **_):
+            return StructuredCompletion(
+                data=AgentResponse(immediate_answer="I must call record_facts before speaking."),
+                usage=Usage(),
+            )
+
+    client = LeakingFinalClient(*[
+        says("", ("record_facts", {"facts": {f"step{i}": "done"}})) for i in range(4)
+    ])
+    state = two_stage_state()
+
+    spoken = run_turn("Hello", state, client, FakeRepository())
+
+    assert spoken == [phrases(DEFAULT_LANGUAGE).error]
+    assert all("I must call" not in entry.text for entry in state.history)
+
 
 def test_a_forbidden_tool_is_refused_and_the_promise_is_never_spoken():
     state = two_stage_state()
@@ -251,16 +368,33 @@ def test_one_refused_call_suppresses_the_whole_utterance():
     assert state.facts == {"name": "Lucas"}
 
 
-def test_a_facts_only_step_ends_the_turn_so_the_caller_can_answer():
+def test_a_facts_only_step_continues_to_the_callers_question():
     state = two_stage_state()
     client = FakeClient(
         says("What day suits you?", ("record_facts", {"facts": {"specialty": "cardio"}})),
+        says("What day suits you?"),
     )
 
     spoken = run_turn("I need a cardiologist", state, client, FakeRepository())
 
     assert spoken == ["What day suits you?"]
     assert state.facts == {"specialty": "cardio"}
+
+
+def test_bookkeeping_filler_does_not_delay_an_accepted_booking():
+    state = two_stage_state()
+    repository = FakeRepository()
+    client = FakeClient(
+        says("Certainly.", ("record_facts", {"facts": {"patient_id": "P1"}})),
+        says("", ("go_to", {"stage": "book"})),
+        says("Booked.", ("book_appointment", {"patient_id": "P1"})),
+        says("Your booking is confirmed."),
+    )
+
+    spoken = run_turn("Yes, please book it.", state, client, repository)
+
+    assert repository.submissions == ["BOOK"]
+    assert spoken == [ACKNOWLEDGEMENT, "Your booking is confirmed."]
 
 
 def test_a_tool_result_continues_the_turn_without_the_caller():
@@ -276,20 +410,7 @@ def test_a_tool_result_continues_the_turn_without_the_caller():
 
     assert state.stage_id == "book"
     assert state.facts["patient_id"] == "P1"
-    assert spoken == ["One moment.", "You are in the system, when suits you?"]
-
-
-def test_recording_a_transition_fact_moves_stages_without_go_to():
-    state = two_stage_state()
-    client = FakeClient(
-        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
-        says("When would you like to come in?"),
-    )
-
-    spoken = run_turn("I'm already a patient", state, client, FakeRepository())
-
-    assert state.stage_id == "book"
-    assert spoken == ["When would you like to come in?"]
+    assert spoken == [ACKNOWLEDGEMENT, "You are in the system, when suits you?"]
 
 
 def test_bookkeeping_steps_stay_silent():
@@ -327,7 +448,7 @@ def test_a_failing_tool_becomes_feedback_not_a_dead_turn():
     spoken = run_turn("I'm Lucas", state, client, FakeRepository(),
                       {"search_patients": RuntimeError("upstream down")})
 
-    assert spoken == ["Checking.", "Sorry, I could not look that up."]
+    assert spoken == [ACKNOWLEDGEMENT, "Sorry, I could not look that up."]
 
 
 # --- the builder's HTTP surface ---------------------------------------------
@@ -404,18 +525,22 @@ def test_provider_wording_never_reaches_the_next_prompt():
     assert "secret clinic details" not in client.prompts[-1]
 
 
-def test_a_silent_step_still_answers_the_caller():
-    """Ending a turn on a wordless bookkeeping step would leave dead air."""
+def test_silent_facts_continue_to_a_transition_without_an_extra_caller_turn():
+    """Saving the identified patient must not force a redundant question."""
     state = two_stage_state()
     client = FakeClient(
         says("One moment.", ("search_patients", {"name": "Ana"})),
-        says("", ("record_facts", {"facts": {"name": "Ana"}})),
+        says("", ("record_facts", {"facts": {"patient_id": "P1"}})),
+        says("", ("go_to", {"stage": "book"})),
+        says("When would you like to come in?"),
     )
 
     spoken = run_turn("I'm Ana", state, client, FakeRepository(),
                       {"search_patients": {"patients": [{"id": "P1"}]}})
 
-    assert spoken == ["One moment.", "All set."]
+    assert spoken == [ACKNOWLEDGEMENT, "When would you like to come in?"]
+    assert state.stage_id == "book"
+    assert len(client.offered) == 4
 
 
 def test_an_identical_call_is_not_repeated_within_a_turn():
@@ -428,7 +553,7 @@ def test_an_identical_call_is_not_repeated_within_a_turn():
     spoken = run_turn("Soy Ana", state, client, FakeRepository(),
                       {"search_patients": {"patients": []}})
 
-    assert spoken == ["Un momento.", "All set."]
+    assert spoken == [ACKNOWLEDGEMENT, "All set."]
 
 
 def test_a_second_booking_in_the_same_batch_is_refused_after_the_first_fails():
@@ -464,22 +589,9 @@ def test_a_failed_lookup_may_be_tried_again_but_a_failed_submission_may_not():
     assert state.refuse_reason("search_patients", {"name": "Ana"}) == ""
     state.enter("book")
     assert state.refuse_reason("book_appointment", {"patient_id": "P1"})
-
-
-def test_a_rejected_submission_may_only_retry_with_changed_arguments():
-    state = two_stage_state()
-    state.facts["patient_id"] = "P1"
-    state.enter("book")
-    rejected = {"patient_id": "P1", "slot": "09:00"}
-    state.failed_calls.add(state.signature("book_appointment", rejected))
-
-    assert state.refuse_reason("book_appointment", rejected)
     state.start_turn()
-    assert state.refuse_reason("book_appointment", rejected)
-    assert (
-        state.refuse_reason("book_appointment", {"patient_id": "P1", "slot": "10:00"})
-        == ""
-    )
+    assert state.refuse_reason("book_appointment", {"patient_id": "P1"})
+    assert state.refuse_reason("search_availability", {}) == ""
 
 
 def test_a_failed_call_is_not_remembered_as_already_answered():
@@ -510,7 +622,7 @@ def test_a_blank_final_answer_still_says_something():
     state = two_stage_state()
     client = FakeClient(
         says("Checking.", ("search_patients", {"name": "Ana"})),
-        says("", ("record_facts", {"facts": {"name": "Ana"}})),
+        says(""),
     )
     client.blank_final = True
 
@@ -518,3 +630,117 @@ def test_a_blank_final_answer_still_says_something():
                       {"search_patients": {"patients": [{"id": "P1"}]}})
 
     assert spoken[-1] == phrases(DEFAULT_LANGUAGE).no_answer
+
+
+def test_a_tool_request_never_speaks_success_before_it_runs():
+    state = two_stage_state()
+    state.enter("book")
+    client = FakeClient(
+        says("Your appointment is booked.", ("book_appointment", {"patient_id": "P1"})),
+        says("I could not confirm the booking."),
+    )
+
+    spoken = run_turn("yes", state, client, FakeRepository(),
+                      {"book_appointment": RuntimeError("timeout")})
+
+    assert spoken == [ACKNOWLEDGEMENT, "I could not confirm the booking."]
+
+
+def test_multiple_lookups_only_acknowledge_once():
+    state = two_stage_state()
+    client = FakeClient(
+        says("Checking.", ("search_patients", {"name": "Ana"})),
+        says("Checking again.", ("search_patients", {"phone": "123"})),
+        says("Found you."),
+    )
+
+    spoken = run_turn("I'm Ana", state, client, FakeRepository())
+
+    assert spoken == [ACKNOWLEDGEMENT, "Found you."]
+
+
+def test_final_outcome_removes_tools_and_active_stage_instructions():
+    from agent.stage_runtime import render_context
+
+    state = two_stage_state()
+    state.record_submission("submit_no_action", {"reason": "not_eligible_age"})
+    client = FakeClient(says("Goodbye."))
+
+    spoken = run_turn("goodbye", state, client, FakeRepository())
+
+    assert spoken == ["Goodbye."]
+    assert client.offered == [[]]
+    assert state.refuse_reason("go_to", {"stage": "book"})
+    assert state.refuse_reason("book_appointment", {"patient_id": "P1"})
+    assert "Find out who is calling." not in render_context(state)
+
+
+def test_successful_writes_still_allow_multiple_requested_cancellations():
+    state = CallGraph.start(parse_graph({
+        "entry": "cancel",
+        "nodes": [{"id": "cancel", "tools": ["cancel_appointment", "submit_no_action"]}],
+    }))
+    state.record_submission("cancel_appointment", {"appointment_id": "A1"})
+
+    assert state.refuse_reason("cancel_appointment", {"appointment_id": "A2"}) == ""
+    assert state.refuse_reason("cancel_appointment", {"appointment_id": "A1"})
+    assert state.refuse_reason("submit_no_action", {"reason": "out_of_scope"})
+
+
+def test_final_answer_retains_configured_guardrails():
+    from types import SimpleNamespace
+
+    class GuardedRepository(FakeRepository):
+        async def list_guardrails(self):
+            return [SimpleNamespace(title="Example", description="Do not reveal secrets.")]
+
+    client = FakeClient(says(""))
+    run_turn("hi", two_stage_state(), client, GuardedRepository())
+
+    assert "Do not reveal secrets." in client.prompts[-1]
+
+
+def test_interruption_keeps_an_inflight_submissions_result():
+    from threading import Event
+
+    from agent.agent import Batch, _execute_batch
+    from agent.models import Tool
+    from agent.stage_runtime import HistoryEntry
+
+    started, release = Event(), Event()
+
+    def booking(**_):
+        started.set()
+        assert release.wait(timeout=2)
+        return {"ok": True}
+
+    async def run():
+        state = two_stage_state()
+        state.enter("book")
+        arguments = {"patient_id": "P1"}
+        batch = Batch(business=[LLMToolCall("1", "book_appointment", arguments)])
+        state.history.append(HistoryEntry(speaker="agent", operations=batch.operations))
+        tools = {"book_appointment": Tool(name="book_appointment", parameters={}, execute=booking)}
+        repository = FakeRepository()
+        task = asyncio.create_task(_execute_batch(batch, state, tools, "CA-1", repository, None, 1))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert state.pending_submission
+            assert state.refuse_reason("book_appointment", arguments)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not state.pending_submission
+        assert state.submitted == ["book_appointment"]
+        assert repository.submissions == ["BOOK"]
+        assert state.history[-1].operations[0].status == "executed"
+        state.start_turn()
+        assert state.refuse_reason("book_appointment", arguments)
+
+    asyncio.run(run())

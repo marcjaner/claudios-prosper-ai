@@ -23,6 +23,7 @@ from agent.graph import load_graph
 from agent.language import DEFAULT_LANGUAGE, phrases, reply_instruction
 from agent.llm import LLMClient, ToolCompletion, get_llm_client
 from agent.models import AgentResponse, Tool, ToolCall, ToolResult
+from agent.speech import speech_rejection_reason, spoken_dates
 from agent.stage_runtime import (
     GO_TO_TOOL,
     GRAPH_TOOL_DEFINITIONS,
@@ -71,6 +72,55 @@ SUBMISSIONS = {
 }
 
 
+# The pipeline frames carry model timing too, but they die with the pipeline.
+# This is the same number written where a call can be read back afterwards:
+# tool latency was already visible and the model's was not, which hid where a
+# three-minute budget actually goes.
+LLM_EVENT = "llm_call"
+
+
+def _emit_llm_event(
+    call_id: str,
+    purpose: str,
+    state: CallGraph | None,
+    started_ns: int,
+    prompt: str,
+    model: str,
+    usage: Any = None,
+    error: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "purpose": purpose,
+        "model": model,
+        "ms": round(_duration_ms(started_ns)),
+        # Characters, not tokens: it is the growth that matters, and every
+        # provider counts tokens differently.
+        "prompt_chars": len(prompt),
+        "turn": state.turn if state else 0,
+        "stage": state.stage_id if state else None,
+    }
+    if usage is not None:
+        payload.update(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            cached_tokens=usage.cached_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+        )
+    if metadata:
+        payload.update(metadata)
+    if error:
+        payload["error"] = error
+    try:
+        emit(call_id, LLM_EVENT, payload)
+    except Exception:  # noqa: BLE001 - measuring a call must never fail it
+        # Measuring a call must never be a reason to fail it: an unguarded emit
+        # here would discard a successful completion, or replace the provider's
+        # own error with a bookkeeping one.
+        _logger.warning("could not record model timing | call_id=%s", call_id)
+
+
 def retrieve_memory() -> str:
     return ""
 
@@ -110,15 +160,27 @@ async def _observed_tool_completion(
     client: LLMClient,
     tool_definitions: list[dict[str, Any]],
     event_sink: EventSink | None,
+    call_id: str = "",
+    state: CallGraph | None = None,
 ) -> ToolCompletion:
     request_id = uuid4().hex
     model = client.default_model
+    metadata = {"provider_requested": getattr(client, "provider", None)}
     started_ns = time.perf_counter_ns()
     await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=model))
     try:
         completion = await asyncio.to_thread(
             client.complete_with_tools, prompt, tool_definitions
         )
+    except asyncio.CancelledError:
+        # A hang-up or the call deadline lands here, which is precisely the
+        # stalled request worth seeing. CancelledError is not an Exception.
+        if call_id:
+            _emit_llm_event(
+                call_id, "tools", state, started_ns, prompt, model,
+                error="cancelled", metadata=metadata,
+            )
+        raise
     except Exception as exc:
         await _emit(
             event_sink,
@@ -130,9 +192,20 @@ async def _observed_tool_completion(
                 error_message="LLM request failed",
             ),
         )
+        if call_id:
+            _emit_llm_event(
+                call_id, "tools", state, started_ns, prompt, model,
+                error=type(exc).__name__,
+                metadata=metadata,
+            )
         raise
 
     usage = completion.usage
+    metadata.update(completion.metadata)
+    if call_id:
+        _emit_llm_event(
+            call_id, "tools", state, started_ns, prompt, model, usage, metadata=metadata
+        )
     await _emit(
         event_sink,
         LLMResponseFinishedFrame(
@@ -153,15 +226,25 @@ async def _observed_completion(
     prompt: str,
     client: LLMClient,
     event_sink: EventSink | None,
+    call_id: str = "",
+    state: CallGraph | None = None,
 ) -> AgentResponse:
     request_id = uuid4().hex
     model = client.default_model
+    metadata = {"provider_requested": getattr(client, "provider", None)}
     started_ns = time.perf_counter_ns()
     await _emit(event_sink, LLMRequestStartedFrame(request_id=request_id, model=model))
     try:
         completion = await asyncio.to_thread(
             client.complete_structured, prompt, AgentResponse
         )
+    except asyncio.CancelledError:
+        if call_id:
+            _emit_llm_event(
+                call_id, "answer", state, started_ns, prompt, model,
+                error="cancelled", metadata=metadata,
+            )
+        raise
     except Exception as exc:
         await _emit(
             event_sink,
@@ -173,9 +256,20 @@ async def _observed_completion(
                 error_message="LLM request failed",
             ),
         )
+        if call_id:
+            _emit_llm_event(
+                call_id, "answer", state, started_ns, prompt, model,
+                error=type(exc).__name__,
+                metadata=metadata,
+            )
         raise
 
     usage = completion.usage
+    metadata.update(completion.metadata)
+    if call_id:
+        _emit_llm_event(
+            call_id, "answer", state, started_ns, prompt, model, usage, metadata=metadata
+        )
     await _emit(
         event_sink,
         LLMResponseFinishedFrame(
@@ -402,7 +496,9 @@ async def run_agent_turn(
     llm_client = client or get_llm_client()
     turn_started_at = time.monotonic()
     spoke_this_step = False
+    acknowledged = False
     ending = "waiting"
+    turn_started_ns = time.perf_counter_ns()
     try:
         tools = load_tools(create_clinic_tools(api, call_id))
         for step in range(1, MAX_ACTION_STEPS + 1):
@@ -418,6 +514,8 @@ async def run_agent_turn(
                 llm_client,
                 _offered_tools(state, tools),
                 event_sink,
+                call_id,
+                state,
             )
             batch = _plan_batch(completion, state, call_id, step)
             api_key = os.getenv("TYPESAFE_API_KEY", "").strip()
@@ -436,25 +534,31 @@ async def run_agent_turn(
                                 guardrail_violations=json.dumps(violations, ensure_ascii=False))
                     yield AgentResponse(immediate_answer=GUARDRAIL_REFUSAL, tool_calls=[])
                     return
-            speech = _speech_for(completion, batch.refused, language)
+            speech = _spoken_answer(
+                _speech_for(completion, batch.refused, language), language, call_id
+            )
+            has_business = bool(batch.business)
+            if has_business and acknowledged:
+                speech = ""
             should_speak = bool(speech) and (
                 not completion.tool_calls or _send_immediate_responses()
             )
             spoke_this_step = should_speak
             if should_speak:
+                acknowledged = acknowledged or has_business
                 state.history.append(HistoryEntry(speaker="agent", text=speech))
                 await repository.append_event(call_id, "agent_response", {"text": speech})
                 yield AgentResponse(immediate_answer=speech, tool_calls=[])
             if not completion.tool_calls:
                 break
 
+            state.history.append(HistoryEntry(speaker="agent", operations=batch.operations))
             produced_new = await _execute_batch(
                 batch, state, tools, call_id, repository, event_sink, step
             )
-            state.history.append(HistoryEntry(speaker="agent", operations=batch.operations))
             if batch.refused:
                 continue
-            if not produced_new:
+            if not produced_new and should_speak:
                 break
         else:
             ending = "budget"
@@ -469,6 +573,8 @@ async def run_agent_turn(
                 seconds_remaining=_remaining_seconds(
                     seconds_remaining, turn_started_at
                 ),
+                call_id=call_id,
+                guardrails=guardrail_text,
             )
             state.history.append(HistoryEntry(speaker="agent", text=answer))
             await repository.append_event(call_id, "agent_follow_up", {"text": answer})
@@ -477,7 +583,12 @@ async def run_agent_turn(
         ending = "failed"
         raise
     finally:
-        emit(call_id, "turn_finished", {"turn": state.turn, "stage": state.stage_id, "ending": ending})
+        emit(call_id, "turn_finished", {
+            "turn": state.turn, "stage": state.stage_id, "ending": ending,
+            # The whole turn: every model round-trip and tool call in it, which
+            # is what has to fit inside the platform's three minutes.
+            "ms": round(_duration_ms(turn_started_ns)),
+        })
         await asyncio.to_thread(api.close)
 
 def _send_immediate_responses() -> bool:
@@ -541,6 +652,8 @@ def _graph_prompt(
 
 def _offered_tools(state: CallGraph, tools: dict[str, Tool]) -> list[dict[str, Any]]:
     """The stage's own tools, plus the graph's — go_to only where the stage has exits."""
+    if state.terminal_outcome:
+        return []
     offered = [tools[name].definition for name in state.allowed_tools() if name in tools]
     for definition in GRAPH_TOOL_DEFINITIONS:
         if definition["function"]["name"] == GO_TO_TOOL and not state.has_exits():
@@ -555,15 +668,24 @@ def _speech_for(
     """A draft utterance is only safe once every operation in it was permitted."""
     if refused:
         return ""
-    text = completion.text.strip()
-    if text:
-        return text
     business = [
         call for call in completion.tool_calls
         if call.name not in (RECORD_FACTS_TOOL, GO_TO_TOOL)
     ]
-    # Bookkeeping-only steps stay silent; a caller should never hear the graph working.
-    return phrases(language).acknowledgement if business else ""
+    # A draft cannot confirm an action whose tool has not run yet.
+    if business:
+        return phrases(language).acknowledgement
+    # Facts and transitions are internal steps, even if the model adds filler.
+    return "" if completion.tool_calls else completion.text.strip()
+
+
+def _spoken_answer(text: str, language: Language, call_id: str) -> str:
+    rendered = spoken_dates(text, language)
+    reason = speech_rejection_reason(rendered)
+    if reason:
+        emit(call_id, "speech_blocked", {"reason": reason, "characters": len(rendered)})
+        return phrases(language).error
+    return rendered
 
 
 @dataclass
@@ -654,10 +776,22 @@ async def _execute_batch(
                 "requested": call.name, "reason": late_refusal,
             })
             continue
-        operation = await _run_tool(call, state, tools, call_id, repository, event_sink)
-        batch.operations.append(operation)
-        if operation.status == "executed":
-            state.calls_made.add(state.signature(call.name, call.arguments))
+        async def run_and_record(call=call):
+            try:
+                operation = await _run_tool(call, state, tools, call_id, repository, event_sink)
+                batch.operations.append(operation)
+                if operation.status == "executed":
+                    state.calls_made.add(state.signature(call.name, call.arguments))
+            finally:
+                if call.name in SUBMISSION_TOOL_NAMES:
+                    state.pending_submission = False
+
+        if call.name in SUBMISSION_TOOL_NAMES:
+            state.pending_submission = True
+            task = asyncio.create_task(run_and_record())
+            await _finish_submission(task)
+        else:
+            await run_and_record()
         produced_new = True
 
     if batch.transition is not None:
@@ -674,6 +808,22 @@ async def _execute_batch(
         })
         produced_new = True
     return produced_new
+
+
+async def _finish_submission(task: asyncio.Task) -> None:
+    # A synchronous POST keeps running after an interruption. Even if another
+    # interruption arrives, retain its result before the call closes the client.
+    interrupted = False
+    while True:
+        try:
+            await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            interrupted = True
+    if interrupted:
+        raise asyncio.CancelledError
 
 
 async def _run_tool(
@@ -740,6 +890,9 @@ async def _run_tool(
             detail=json.dumps(output, ensure_ascii=False),
         )
 
+    if call.name in SUBMISSION_TOOL_NAMES:
+        state.record_submission(call.name, call.arguments)
+
     await _emit(
         event_sink,
         ToolCallFinishedFrame(
@@ -773,17 +926,23 @@ async def _final_answer(
     event_sink: EventSink | None,
     language: Language = DEFAULT_LANGUAGE,
     seconds_remaining: int | None = None,
+    call_id: str = "",
+    guardrails: str = "",
 ) -> str:
     """The reserved tool-free step: say what happened, using only what is already known."""
     response = await _observed_completion(
-        f"{_graph_prompt(state, language, seconds_remaining=seconds_remaining)}\n\n"
+        f"{_graph_prompt(state, language, guardrails, seconds_remaining)}\n\n"
         "Answer the caller now using only what is above. Be concise, never mention "
         "internal tools or stages, and do not promise anything you have not already done.",
         client,
         event_sink,
+        call_id,
+        state,
     )
     # A structurally valid but blank answer would still leave the caller in silence.
-    return response.immediate_answer.strip() or phrases(language).no_answer
+    return _spoken_answer(
+        response.immediate_answer.strip(), language, call_id
+    ) or phrases(language).no_answer
 
 
 def _tool_error_output(error: Exception, *, can_retry: bool) -> dict[str, Any]:

@@ -1,27 +1,38 @@
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 from pipecat.audio.turn.base_turn_analyzer import (
     BaseTurnAnalyzer,
     BaseTurnParams,
     EndOfTurnState,
 )
+from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
     InputAudioRawFrame,
     InterimTranscriptionFrame,
+    LLMContextFrame,
+    ProposedUserStoppedSpeakingFrame,
+    StartFrame,
     TranscriptionFrame,
-    UserStoppedSpeakingFrame,
+    TTSSpeakFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import TurnMetricsData
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
+from pipecat.utils.asyncio.task_manager import TaskManager
 
+from agent import transcription
+from agent.transcription import create_user_aggregator
+from stt import deepgram
 from stt.deepgram import (
     DeepgramEndpointingStopStrategy,
     DeepgramEOTCoordinator,
     DeepgramEOTEventFrame,
 )
+from twilio.handshake import CallMeta
 from twilio.recording import CallTimelineObserver
 
 
@@ -109,10 +120,11 @@ def test_smart_turn_complete_commits_after_grace_period():
 
     transcript, analyzed_audio_states, emitted = asyncio.run(run())
 
-    assert transcript.finalized is True
+    assert transcript.finalized is False
     assert analyzed_audio_states == [[False, True]]
-    assert any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
-    assert emitted[-1] is transcript
+    assert any(isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted)
+    assert isinstance(emitted[-1], ProposedUserStoppedSpeakingFrame)
+    assert sum(frame is transcript for frame in emitted) == 1
     decisions = [
         frame.decision for frame in emitted if isinstance(frame, DeepgramEOTEventFrame)
     ]
@@ -132,7 +144,9 @@ def test_smart_turn_incomplete_vetoes_deepgram_candidate():
     transcript, emitted = asyncio.run(run())
 
     assert transcript.finalized is False
-    assert not any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    assert not any(
+        isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted
+    )
     decision = emitted[-1]
     assert isinstance(decision, DeepgramEOTEventFrame)
     assert decision.smart_turn_probability == 0.5
@@ -152,8 +166,8 @@ def test_smart_turn_incomplete_commits_after_bounded_timeout():
 
     transcript, emitted = asyncio.run(run())
 
-    assert transcript.finalized is True
-    assert any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    assert transcript.finalized is False
+    assert any(isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted)
     decisions = [
         frame.decision for frame in emitted if isinstance(frame, DeepgramEOTEventFrame)
     ]
@@ -177,7 +191,9 @@ def test_smart_turn_incomplete_still_cancels_when_speech_resumes():
     transcript, emitted = asyncio.run(run())
 
     assert transcript.finalized is False
-    assert not any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    assert not any(
+        isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted
+    )
     decisions = [
         frame.decision for frame in emitted if isinstance(frame, DeepgramEOTEventFrame)
     ]
@@ -200,7 +216,9 @@ def test_smart_turn_cannot_stop_without_deepgram_candidate():
     analyzed_audio_states, emitted = asyncio.run(run())
 
     assert analyzed_audio_states == []
-    assert not any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    assert not any(
+        isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted
+    )
 
 
 def test_vad_resume_cancels_pending_turn_stop():
@@ -216,9 +234,13 @@ def test_vad_resume_cancels_pending_turn_stop():
     transcript, resumed, emitted = asyncio.run(run())
 
     assert transcript.finalized is False
-    assert not any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
-    assert emitted[-2:] == [transcript, resumed]
-    cancellation = emitted[-3]
+    assert not any(
+        isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted
+    )
+    assert emitted[0] is transcript
+    assert emitted[-1] is resumed
+    assert sum(frame is transcript for frame in emitted) == 1
+    cancellation = emitted[-2]
     assert isinstance(cancellation, DeepgramEOTEventFrame)
     assert cancellation.vad_state == "speaking"
     assert cancellation.cancellation_reason == "vad_resumed"
@@ -241,9 +263,13 @@ def test_new_transcript_cancels_pending_turn_stop():
     endpoint, continuation, emitted = asyncio.run(run())
 
     assert endpoint.finalized is False
-    assert not any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
-    assert emitted[-2:] == [endpoint, continuation]
-    cancellation = emitted[-3]
+    assert not any(
+        isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted
+    )
+    assert emitted[0] is endpoint
+    assert emitted[-1] is continuation
+    assert sum(frame is endpoint for frame in emitted) == 1
+    cancellation = emitted[-2]
     assert isinstance(cancellation, DeepgramEOTEventFrame)
     assert cancellation.cancellation_reason == "new_transcript"
 
@@ -269,9 +295,9 @@ def test_segment_final_after_vad_stops_can_end_turn():
 
     transcript, emitted = asyncio.run(run())
 
-    assert transcript.finalized is True
+    assert transcript.finalized is False
     assert sum(frame is transcript for frame in emitted) == 1
-    assert any(isinstance(frame, UserStoppedSpeakingFrame) for frame in emitted)
+    assert any(isinstance(frame, ProposedUserStoppedSpeakingFrame) for frame in emitted)
     commit = next(
         frame
         for frame in emitted
@@ -321,7 +347,7 @@ def test_eot_event_is_recorded_in_call_timeline():
     }
 
 
-def test_finalized_transcript_triggers_normal_turn_stop():
+def test_turn_stop_proposal_triggers_normal_turn_stop():
     async def run():
         strategy = CapturingEndpointingStopStrategy()
         transcript = TranscriptionFrame(
@@ -331,8 +357,99 @@ def test_finalized_transcript_triggers_normal_turn_stop():
         )
         transcript.finalized = True
         await strategy.process_frame(transcript)
+        assert strategy.calls == []
+        await strategy.process_frame(ProposedUserStoppedSpeakingFrame())
         return strategy.calls
 
     calls = asyncio.run(run())
 
-    assert calls == [False]
+    assert calls == [None]
+
+
+async def connect_aggregator(coordinator):
+    turns = []
+    frames = []
+    stopped = asyncio.Event()
+
+    async def capture_turn(_meta, content):
+        turns.append(content)
+        stopped.set()
+
+    meta = CallMeta("test-call", "test-stream", None, datetime.now().astimezone())
+    aggregator = create_user_aggregator(meta, capture_turn)
+
+    async def capture_frame(frame, direction=FrameDirection.DOWNSTREAM):
+        if direction == FrameDirection.DOWNSTREAM:
+            frames.append(frame)
+
+    aggregator.push_frame = capture_frame
+    coordinator.push_frame = aggregator.process_frame
+    setup = FrameProcessorSetup(
+        clock=SystemClock(),
+        task_manager=TaskManager(),
+        pipeline_worker=cast(Any, None),
+    )
+    await aggregator.setup(setup)
+    await coordinator.setup(setup)
+    await aggregator.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
+    return aggregator, turns, frames, stopped
+
+
+def test_delayed_hello_reaches_aggregator_before_empty_turn_timeout(monkeypatch):
+    # Same race as the live call, using shorter clocks: the watchdog would
+    # expire after the interim but before the deferred final is released.
+    monkeypatch.setattr(transcription, "USER_TURN_STOP_TIMEOUT_SECONDS", 0.4)
+
+    async def run():
+        coordinator = DeepgramEOTCoordinator(
+            FakeSmartTurn(probability=0.05), incomplete_timeout_seconds=0.3
+        )
+        aggregator, turns, frames, stopped = await connect_aggregator(coordinator)
+        try:
+            await coordinator.process_frame(
+                InterimTranscriptionFrame("Hello.", "caller", "now"),
+                FrameDirection.DOWNSTREAM,
+            )
+            await asyncio.sleep(0.2)
+            await coordinator.process_frame(
+                speech_final("Hello?"), FrameDirection.DOWNSTREAM
+            )
+            await asyncio.wait_for(stopped.wait(), timeout=1)
+            await asyncio.sleep(0.05)
+            assert turns == ["Hello?"]
+            assert not any(isinstance(frame, TTSSpeakFrame) for frame in frames)
+            assert sum(isinstance(frame, LLMContextFrame) for frame in frames) == 1
+        finally:
+            await coordinator.cleanup()
+            await aggregator.cleanup()
+
+    asyncio.run(run())
+
+
+def test_final_transcript_during_speech_ends_on_proposal_without_duplicate(monkeypatch):
+    monkeypatch.setattr(deepgram, "DEEPGRAM_EOT_GRACE_SECONDS", 0.05)
+
+    async def run():
+        coordinator = DeepgramEOTCoordinator(FakeSmartTurn(probability=0.9))
+        aggregator, turns, frames, stopped = await connect_aggregator(coordinator)
+        try:
+            for frame in (
+                VADUserStartedSpeakingFrame(),
+                TranscriptionFrame(
+                    "I'd like an appointment.",
+                    "caller",
+                    "now",
+                    result=SimpleNamespace(speech_final=False),
+                ),
+                VADUserStoppedSpeakingFrame(),
+            ):
+                await coordinator.process_frame(frame, FrameDirection.DOWNSTREAM)
+            await asyncio.wait_for(stopped.wait(), timeout=0.3)
+            assert turns == ["I'd like an appointment."]
+            assert sum(isinstance(frame, LLMContextFrame) for frame in frames) == 1
+            assert not any(isinstance(frame, TTSSpeakFrame) for frame in frames)
+        finally:
+            await coordinator.cleanup()
+            await aggregator.cleanup()
+
+    asyncio.run(run())

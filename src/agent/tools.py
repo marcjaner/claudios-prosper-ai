@@ -17,6 +17,7 @@ from .clinic_models import (
     RescheduleRequest,
 )
 from .models import Tool
+from .nearest_site import search_filtered_availability, search_nearest_availability
 
 DateValue = Annotated[str, "ISO date in YYYY-MM-DD format."]
 AvailabilityStartDate = Annotated[
@@ -121,17 +122,29 @@ class ClinicTools:
         location_id: LocationId | None = None,
         patient_id: PatientId | None = None,
         insurers: list[InsurerId] | None = None,
+        provider_language: Annotated[Literal["es", "en", "ca"], "Required language spoken by the doctor, only when the caller requests it. Keep this filter in every availability search."] | None = None,
+        near_address: Annotated[
+            str, "Caller-provided street, number and town when they request the nearest site. Omit location_id when using this."
+        ] | None = None,
+        time_from: Annotated[str, "Earliest acceptable appointment start, local HH:MM, inclusive. Only if the caller limits the time of day."] | None = None,
+        time_to: Annotated[str, "Latest acceptable appointment start, local HH:MM, inclusive. Only if the caller limits the time of day."] | None = None,
     ) -> dict[str, Any]:
-        """Return bookable slots and blocked reasons. Use either provider_id or specialty_id, exact catalogue IDs, and no more than 14 inclusive days."""
-        return self._api.search_availability(
-            date_from=date_from,
-            date_to=date_to,
-            provider_id=provider_id,
-            specialty_id=specialty_id,
-            location_id=location_id,
-            patient_id=patient_id,
-            insurers=insurers,
-        )
+        """Return bookable slots and blocked reasons. Use either provider_id or specialty_id, exact catalogue IDs, and no more than 14 inclusive days. For the closest site, pass near_address; the tool calculates distances and checks eligibility."""
+        filters = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "provider_id": provider_id,
+            "specialty_id": specialty_id,
+            "location_id": location_id,
+            "patient_id": patient_id,
+            "insurers": insurers,
+            "provider_language": provider_language,
+            "time_from": time_from,
+            "time_to": time_to,
+        }
+        if near_address is not None:
+            return search_nearest_availability(self._api, near_address, filters)
+        return search_filtered_availability(self._api, filters)
 
     def register_patient(
         self,
@@ -239,6 +252,13 @@ SUBMISSION_TOOL_NAMES = frozenset(
         "escalate_to_human",
     }
 )
+
+# The two routes that say the call ended without a write. A call has exactly one
+# ending, so neither may follow anything else: reporting no action after booking
+# contradicts the booking, and escalating after refusing reports the call twice.
+# The write routes are not in here because a caller may genuinely ask for two
+# things — "cancel mine and my son's" is two cancellations.
+OUTCOME_TOOL_NAMES = frozenset({"submit_no_action", "escalate_to_human"})
 
 
 def create_clinic_tools(api: ClinicApi, call_id: str) -> list[Callable[..., Any]]:

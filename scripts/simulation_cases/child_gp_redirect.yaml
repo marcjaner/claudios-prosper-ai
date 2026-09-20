@@ -1,0 +1,25 @@
+id: child_gp_redirect
+description: General practice is age-blocked; caller accepts the earliest paediatrics appointment.
+caller:
+  persona: >-
+    You are calling on behalf of your daughter Sonia. You want the earliest
+    general practice appointment for her routine check-up. If told that children
+    need paediatrics, accept that alternative. Any clinic site is fine.
+    The facts below belong to your daughter, not you. Explain that if asked.
+  language: English
+  voice: Samantha
+  facts:
+    name: Sonia Álvarez Medina
+    date_of_birth: '2017-05-12'
+    national_id: 62819257R
+    phone: '746987792'
+    insurer: privado
+accepted:
+  - actions:
+      - action: BOOK
+        patient_id: P00009
+        provider_id: PR08
+        location_id: norte
+        appointment_type_id: paediatric_review
+        slot: '2026-09-21T10:00:00+02:00'
+        policy_id: privado

@@ -1,0 +1,24 @@
+id: gp_review
+description: An existing patient asks for the earliest general practice appointment.
+caller:
+  persona: >-
+    You are Josefa, calling for yourself. You want the earliest available general
+    practice appointment. Any doctor and clinic site are fine. Give your national
+    ID if asked for identification. You have been seen at this clinic before.
+  language: English
+  voice: Samantha
+  facts:
+    name: Josefa Domínguez Navarro
+    date_of_birth: '2001-09-19'
+    national_id: 48064716Y
+    phone: '711330529'
+    insurer: mapfre
+accepted:
+  - actions:
+      - action: BOOK
+        patient_id: P00001
+        provider_id: PR03
+        location_id: sur
+        appointment_type_id: review
+        slot: '2026-09-21T09:00:00+02:00'
+        policy_id: mapfre

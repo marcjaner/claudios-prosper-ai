@@ -1,0 +1,20 @@
+id: age_refusal
+description: The caller explicitly declines the age-appropriate alternative.
+caller:
+  persona: >-
+    You are Sonia's mother, calling for a general practice routine check-up
+    for your daughter. You only want general practice and will decline paediatrics
+    if it is offered. Accept an explanation of the age restriction and say goodbye.
+    The facts below belong to your daughter.
+  language: English
+  voice: Samantha
+  facts:
+    name: Sonia Álvarez Medina
+    date_of_birth: '2017-05-12'
+    national_id: 62819257R
+    phone: '746987792'
+    insurer: privado
+accepted:
+  - actions:
+      - action: NO_ACTION
+        reason: not_eligible_age

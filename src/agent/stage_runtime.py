@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .graph import GO_TO_TOOL, RECORD_FACTS_TOOL, Graph, load_graph
-from .tools import SUBMISSION_TOOL_NAMES
+from .tools import OUTCOME_TOOL_NAMES, SUBMISSION_TOOL_NAMES
 
 # An action step's speech is written before its own results, so the last step of a
 # turn is always tool-free: otherwise a booking on the final step is never confirmed.
@@ -82,11 +82,19 @@ class CallGraph:
     failed_tools: set[str] = field(default_factory=set)
     failed_calls: set[str] = field(default_factory=set)
     calls_made: set[str] = field(default_factory=set)
+    # A record belongs to the call, not to the turn that wrote it.
+    submitted: list[str] = field(default_factory=list)
+    submitted_calls: set[str] = field(default_factory=set)
+    pending_submission: bool = False
 
     def start_turn(self) -> None:
         self.turn += 1
-        self.failed_tools.clear()
+        self.failed_tools.intersection_update(SUBMISSION_TOOL_NAMES)
         self.calls_made.clear()
+
+    def record_submission(self, name: str, arguments: dict[str, Any]) -> None:
+        self.submitted.append(name)
+        self.submitted_calls.add(self.signature(name, arguments))
 
     @staticmethod
     def signature(name: str, arguments: dict[str, Any]) -> str:
@@ -102,31 +110,64 @@ class CallGraph:
         return self.graph.node(self.stage_id)
 
     def allowed_tools(self) -> list[str]:
+        if self.terminal_outcome:
+            return []
         return list(self.stage.tools)
+
+    @property
+    def terminal_outcome(self) -> str | None:
+        return next((name for name in self.submitted if name in OUTCOME_TOOL_NAMES), None)
 
     def has_exits(self) -> bool:
         return any(edge.source == self.stage_id for edge in self.graph.edges)
 
     def refuse_reason(self, name: str, arguments: dict[str, Any]) -> str:
         """Why this call is not allowed here, or an empty string if it is."""
+        if self.terminal_outcome:
+            return "A final outcome is already recorded; explain it without starting another action."
         if name == RECORD_FACTS_TOOL:
             return "" if self.has_facts_payload(arguments) else "record_facts needs a flat mapping of strings"
         if name == GO_TO_TOOL:
             return self._refuse_transition(str(arguments.get("stage", "")))
         if name not in self.stage.tools:
             return f"{name} is not available in stage {self.stage_id}"
-        if name in self.failed_tools and name in SUBMISSION_TOOL_NAMES:
-            # A submission that failed may still have been received, so repeating it
-            # could book the same patient twice. A failed lookup may simply be tried
-            # again, which is how a caller survives one flaky directory request.
-            return f"{name} already failed once this turn and must not be retried"
-        if self.signature(name, arguments) in self.failed_calls:
-            return f"{name} already failed with these arguments in this call"
+        if name in SUBMISSION_TOOL_NAMES:
+            if self.pending_submission:
+                return "A submission is still in flight; wait for its result before another action."
+            if self.failed_tools.intersection(SUBMISSION_TOOL_NAMES):
+                return "A previous submission may already have been received; do not submit another action."
+            if self.signature(name, arguments) in self.failed_calls:
+                return f"{name} already failed with these arguments in this call"
+            refusal = self._refuse_second_record(name, arguments)
+            if refusal:
+                return refusal
         if self.signature(name, arguments) in self.calls_made:
             # The answer is already in the conversation against a read-only EHR,
             # so repeating it would spend the turn's budget saying nothing new.
             # Only calls that succeeded are recorded, so a failed read may retry.
             return f"{name} was already called with these arguments this turn"
+        return ""
+
+    def _refuse_second_record(self, name: str, arguments: dict[str, Any]) -> str:
+        """Guard the record itself, which outlives the turn that wrote it.
+
+        A case accepts an exact list of actions, so a spurious extra fails one
+        the agent had already got right — a correct booking followed by an
+        escalation because the caller asked something unrelated is a real
+        failure we have seen. Two *writes* stay legal: a caller may cancel two
+        appointments in one call.
+        """
+        if self.signature(name, arguments) in self.submitted_calls:
+            return f"{name} with these exact values was already reported on this call"
+        if not self.submitted:
+            return ""
+        if OUTCOME_TOOL_NAMES.intersection(self.submitted):
+            return f"this call already ended with {self.submitted[-1]}; it reports one ending"
+        if name in OUTCOME_TOOL_NAMES:
+            return (
+                f"{name} would contradict the {self.submitted[-1]} already reported; "
+                "not knowing the answer to a question is not an outcome"
+            )
         return ""
 
     def _refuse_transition(self, target: str) -> str:
@@ -191,11 +232,18 @@ class CallGraph:
 def render_context(state: CallGraph) -> str:
     """Everything the model needs about where the call is and what it knows."""
     sections = [f"Current stage: {state.stage_id}"]
-    if state.stage.prompt.strip():
+    if state.terminal_outcome:
+        sections.append(
+            f"Final outcome already recorded: {state.terminal_outcome}. "
+            "Explain the recorded outcome briefly. Do not offer another appointment, "
+            "promise another action, or say that the phone call or system is closed. "
+            "If the caller says goodbye, say goodbye without repeating the explanation."
+        )
+    elif state.stage.prompt.strip():
         sections.append(state.stage.prompt.strip())
     sections.append(_render_facts(state.facts))
     options = state.transition_options()
-    if options:
+    if options and not state.terminal_outcome:
         sections.append(_render_transitions(options))
     sections.append(_render_history(state.history))
     return "\n\n".join(sections)
@@ -224,10 +272,27 @@ def _render_history(history: list[HistoryEntry]) -> str:
     if not history:
         return "Conversation so far:\n  (this is the first thing said)"
     lines = []
+    catalogues: list[dict[str, Any]] = []
     for entry in history:
         if entry.text:
             lines.append(f"  {entry.speaker}: {entry.text}")
         for operation in entry.operations:
+            if (
+                operation.name == "get_clinic_catalogue"
+                and operation.status == "executed"
+                and isinstance(operation.result, dict)
+            ):
+                if operation.result in catalogues:
+                    lines.append(
+                        "  [tool] get_clinic_catalogue({}) -> same result as "
+                        f"catalogue #{catalogues.index(operation.result) + 1} above."
+                    )
+                    continue
+                catalogues.append(operation.result)
+                lines.append(
+                    f"  {_render_operation(operation)} [catalogue #{len(catalogues)}]"
+                )
+                continue
             lines.append(f"  {_render_operation(operation)}")
     return "Conversation so far:\n" + "\n".join(lines)
 

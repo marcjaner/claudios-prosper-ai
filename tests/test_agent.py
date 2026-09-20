@@ -142,6 +142,6 @@ def test_clinic_tool_does_not_block_event_loop(monkeypatch):
     responses = asyncio.run(run())
 
     assert [response.immediate_answer for response in responses] == [
-        "Un momento",
+        "One moment, let me check that.",
         "No encuentro el paciente",
     ]
