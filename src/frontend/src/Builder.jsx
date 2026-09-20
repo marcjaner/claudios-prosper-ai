@@ -23,31 +23,148 @@ const splitKeys = (text) =>
 let edgeSequence = 0;
 const nextEdgeId = () => `edge_${(edgeSequence += 1)}`;
 
+// Nurse-facing names for the agent's tools. The canvas and the tool list show
+// these; anything not mapped falls back to the raw function name.
+const TOOL_LABELS = {
+  search_patients: "Buscar paciente",
+  register_patient: "Registrar paciente",
+  get_clinic_catalogue: "Consultar servicios",
+  get_patient_appointments: "Ver citas del paciente",
+  search_availability: "Buscar disponibilidad",
+  book_appointment: "Reservar cita",
+  reschedule_appointment: "Cambiar cita",
+  cancel_appointment: "Cancelar cita",
+  escalate_to_human: "Pasar a recepción",
+  submit_no_action: "Sin acción",
+};
+
+// Plumbing the agent needs but a nurse never reasons about: kept in the
+// advanced tool list, hidden from the at-a-glance canvas card.
+const CANVAS_HIDDEN_TOOLS = new Set(["submit_no_action"]);
+const CANVAS_CHIP_LIMIT = 3;
+
+const toolLabel = (name) => TOOL_LABELS[name] ?? name;
+
+// Stage icons are guessed from the (user-editable, free-text) stage name, so
+// this is best-effort with a generic fallback — never a hard dependency.
+const STAGE_ICONS = {
+  patient: (
+    <>
+      <circle cx="12" cy="8" r="3.5" />
+      <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+    </>
+  ),
+  register: (
+    <>
+      <circle cx="10" cy="8" r="3.5" />
+      <path d="M4 20a6.5 6.5 0 0 1 10.5-5.1" />
+      <path d="M18 13.5v6M15 16.5h6" />
+    </>
+  ),
+  calendar: (
+    <>
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M8 3v4M16 3v4M4 10h16" />
+    </>
+  ),
+  reschedule: (
+    <>
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M8 3v4M16 3v4M4 10h16" />
+      <path d="M15 14.5l2.5 2.5" />
+    </>
+  ),
+  cancel: (
+    <>
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M8 3v4M16 3v4M4 10h16" />
+      <path d="M10 14.5l4 4M14 14.5l-4 4" />
+    </>
+  ),
+  phone: <path d="M4 5c0 8 7 15 15 15v-3.4l-4-1.4-1.8 1.8a12 12 0 0 1-6.2-6.2L8.8 9 7.4 5H4z" />,
+  info: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 11.5v4.5M12 8h.01" />
+    </>
+  ),
+  step: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8.5 12l2.5 2.5 4.5-5" />
+    </>
+  ),
+};
+
+// First keyword hit wins, so the more specific stages are listed first.
+const ICON_KEYWORDS = [
+  [["registr", "alta", "nuevo", "nueva"], "register"],
+  [["identif", "buscar", "paciente", "quien"], "patient"],
+  [["cancel", "anular", "baja"], "cancel"],
+  [["modific", "cambi", "reprogram", "reschedul"], "reschedule"],
+  [["reserv", "cita", "agenda", "book"], "calendar"],
+  [["atend", "llam", "recep", "telefon", "escal"], "phone"],
+  [["consult", "inform", "servic", "catal", "precio"], "info"],
+];
+
+const iconFor = (name) => {
+  const key = name.toLowerCase();
+  for (const [words, icon] of ICON_KEYWORDS) {
+    if (words.some((word) => key.includes(word))) return STAGE_ICONS[icon];
+  }
+  return STAGE_ICONS.step;
+};
+
+function StageIcon({ name }) {
+  return (
+    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4 fill-none stroke-current"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {iconFor(name)}
+      </svg>
+    </span>
+  );
+}
+
 function StageNode({ id, data, selected }) {
+  const chips = data.tools.filter((tool) => !CANVAS_HIDDEN_TOOLS.has(tool));
+  const shown = chips.slice(0, CANVAS_CHIP_LIMIT);
+  const extra = chips.length - shown.length;
   return (
     <div
-      className={`min-w-44 rounded-xl border bg-white px-3 py-2 text-left shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${
+      className={`min-w-52 max-w-64 rounded-xl border bg-white px-3 py-2.5 text-left shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${
         selected ? "border-emerald-400 ring-1 ring-emerald-200" : "border-slate-200"
       }`}
     >
       <Handle type="target" position={Position.Left} className="!bg-emerald-500" />
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-slate-900">{id}</span>
+        <StageIcon name={id} />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{id}</span>
         {data.isEntry && (
           <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
             entrada
           </span>
         )}
       </div>
-      {data.tools.length === 0 ? (
-        <p className="mt-1 text-[11px] text-slate-400">sin herramientas</p>
+      {chips.length === 0 ? (
+        <p className="mt-2 text-[11px] text-slate-400">Sin acciones</p>
       ) : (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {data.tools.map((tool) => (
-            <span key={tool} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-              {tool}
+        <div className="mt-2 flex flex-wrap gap-1">
+          {shown.map((tool) => (
+            <span key={tool} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+              {toolLabel(tool)}
             </span>
           ))}
+          {extra > 0 && (
+            <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-400">
+              +{extra} más
+            </span>
+          )}
         </div>
       )}
       <Handle type="source" position={Position.Right} className="!bg-emerald-500" />
@@ -344,7 +461,9 @@ export default function Builder() {
             </div>
 
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Instrucciones</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Qué hace en este paso
+              </span>
               <textarea
                 value={node.data.prompt}
                 onChange={(event) => patchNode(node.id, { prompt: event.target.value })}
@@ -353,44 +472,62 @@ export default function Builder() {
               />
             </label>
 
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Herramientas</span>
-              <div className="mt-1 space-y-1">
-                {tools.map((tool) => (
-                  <label key={tool.name} className="flex items-start gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={node.data.tools.includes(tool.name)}
-                      onChange={(event) =>
-                        patchNode(node.id, {
-                          tools: event.target.checked
-                            ? [...node.data.tools, tool.name]
-                            : node.data.tools.filter((name) => name !== tool.name),
-                        })
-                      }
-                      className="mt-1 accent-emerald-600"
-                    />
-                    <span>
-                      <span className="font-mono text-xs text-slate-700">{tool.name}</span>
-                      <span className="block text-[11px] text-slate-400">{tool.description}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
+            <details className="group rounded-xl border border-slate-200">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-sm font-medium text-slate-600 [&::-webkit-details-marker]:hidden">
+                Ajustes avanzados
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-4 w-4 shrink-0 fill-none stroke-current text-slate-400 transition-transform group-open:rotate-180"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </summary>
+              <div className="space-y-4 border-t border-slate-200 px-3 py-3">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Acciones permitidas
+                  </span>
+                  <div className="mt-1 space-y-1">
+                    {tools.map((tool) => (
+                      <label key={tool.name} className="flex items-start gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={node.data.tools.includes(tool.name)}
+                          onChange={(event) =>
+                            patchNode(node.id, {
+                              tools: event.target.checked
+                                ? [...node.data.tools, tool.name]
+                                : node.data.tools.filter((name) => name !== tool.name),
+                            })
+                          }
+                          className="mt-1 accent-emerald-600"
+                        />
+                        <span>
+                          <span className="text-slate-700">{toolLabel(tool.name)}</span>
+                          <span className="block text-[11px] text-slate-400">{tool.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
 
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Olvida al entrar
-              </span>
-              <KeyList
-                value={node.data.clears}
-                draft={draftKeys}
-                setDraft={setDraftKeys}
-                onCommit={(keys) => patchNode(node.id, { clears: keys })}
-                placeholder="p. ej. slot, policy_id"
-              />
-            </label>
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Olvida al entrar
+                  </span>
+                  <KeyList
+                    value={node.data.clears}
+                    draft={draftKeys}
+                    setDraft={setDraftKeys}
+                    onCommit={(keys) => patchNode(node.id, { clears: keys })}
+                    placeholder="p. ej. slot, policy_id"
+                  />
+                </label>
+              </div>
+            </details>
           </div>
         )}
 
@@ -401,7 +538,7 @@ export default function Builder() {
             </h2>
             <label className="block">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Datos necesarios
+                Datos necesarios para continuar
               </span>
               <KeyList
                 value={edge.data?.requires ?? []}
