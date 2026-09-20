@@ -26,14 +26,14 @@ selected TTS provider, and either `HELMCODE_API_KEY` or `OPENAI_API_KEY` in
 `TYPESAFE_DEFAULT_MODEL` defaults to `jev-latest`:
 
 ```shell
-PYTHONPATH=src uv run python -m agent
+./run.sh
 ```
 
 Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
-with the Prosper clinic tools, and TTS. The launcher prints the selected port;
-it uses `PORT`, then the first free Conductor workspace port, then the first
-free port starting at `7860`. The observability console is at `/` on that
-address.
+with the Prosper clinic tools, and TTS. The launcher builds the dashboard and
+starts both servers on available ports. In Conductor it prefers the workspace's
+allocated port range; elsewhere it selects free ports automatically. Open the
+frontend URL printed by the launcher.
 
 ## Production deployment (Railway)
 
