@@ -35,6 +35,25 @@ it uses `PORT`, then the first free Conductor workspace port, then the first
 free port starting at `7860`. The call tester is at `/` and the observability
 console at `/app` on that address.
 
+## Production deployment (Railway)
+
+The repository contains a Docker deployment that builds the React console and
+serves it from the same FastAPI process as the call WebSocket. This keeps the
+public endpoint, `/ws`, and dashboard at `/app/` on one origin.
+
+1. Create a Railway project and deploy this repository; `railway.json` selects
+   the included Dockerfile.
+2. Add a Volume mounted at `/data` to the service. Call history and guardrails
+   are persisted there as SQLite databases.
+3. Set the secrets from `.env.example` in Railway Variables. At minimum set
+   `PLATFORM_API_KEY`, `PLATFORM_API_BASE_URL`, `DEEPGRAM_API_KEY`,
+   `CARTESIA_API_KEY`, and either `HELMCODE_API_KEY` or `OPENAI_API_KEY` with
+   its model settings. Do not commit these values.
+4. Keep `DATABASE_URL=sqlite+aiosqlite:////data/agent.db` and
+   `CALLS_DB=/data/calls.db` so all state stays on the mounted volume.
+5. Generate a public domain, check `https://<domain>/health`, then register
+   `wss://<domain>/ws` as the integration endpoint in Prosper.
+
 ## Twilio transport
 
 `src/twilio/` is the WebSocket server the harness dials. It owns the wire and
