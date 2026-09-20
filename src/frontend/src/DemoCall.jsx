@@ -21,6 +21,14 @@ function CloseIcon() {
   );
 }
 
+function MinimizeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round">
+      <path d="M6 12h12" />
+    </svg>
+  );
+}
+
 function MicrophoneIcon({ muted = false }) {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -58,6 +66,20 @@ function AudioWave({ active }) {
         />
       ))}
     </div>
+  );
+}
+
+function AgentPulse({ active }) {
+  return (
+    <span className="agent-pulse" aria-hidden="true">
+      {[10, 18, 25, 16, 22].map((height, index) => (
+        <span
+          key={`${height}-${index}`}
+          className="agent-pulse-bar"
+          style={{ height, animationDelay: `${index * -120}ms`, animationPlayState: active ? "running" : "paused" }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -109,7 +131,7 @@ function SetupCall({ callerNumber, setCallerNumber, withholdCallerId, setWithhol
         className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/10 transition hover:-translate-y-0.5 hover:bg-emerald-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
       >
         <PhoneIcon className="h-4 w-4" />
-        Start demo call
+        Call Agent
       </button>
       <p className="mt-auto pt-6 text-center text-xs leading-5 text-slate-400">
         Headphones recommended to prevent speaker feedback.
@@ -223,7 +245,7 @@ function FinishedCall({ callId, error, reset, closeDrawer }) {
   );
 }
 
-export default function DemoCall({ dark = false }) {
+export default function DemoCall() {
   const [isOpen, setIsOpen] = useState(false);
   const [callerNumber, setCallerNumber] = useState(DEFAULT_CALLER_NUMBER);
   const [withholdCallerId, setWithholdCallerId] = useState(false);
@@ -233,74 +255,88 @@ export default function DemoCall({ dark = false }) {
 
   return (
     <>
-      <button
-        type="button"
-        aria-expanded={isOpen}
-        aria-controls="demo-call-drawer"
-        onClick={() => setIsOpen(true)}
-        className={`hidden items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-semibold shadow-sm transition sm:inline-flex ${
-          isInCall
-            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-            : dark
-              ? "border-slate-700 bg-slate-900 text-slate-300 hover:border-emerald-500/60 hover:text-emerald-300"
-              : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700"
-        }`}
-      >
-        <span className="relative">
-          <PhoneIcon className="h-4 w-4" />
-          {isInCall ? <span className="absolute -right-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-emerald-500 ring-2 ring-emerald-50" /> : null}
-        </span>
-        {isInCall ? duration : "Demo call"}
-      </button>
-
-      {!isOpen ? (
+      {!isOpen && !isInCall ? (
         <button
           type="button"
+          aria-expanded="false"
+          aria-controls="demo-call-drawer"
           onClick={() => setIsOpen(true)}
-          className={`fixed bottom-5 right-5 z-40 inline-flex items-center gap-3 rounded-full px-4 py-3 text-sm font-semibold shadow-[0_14px_40px_rgba(15,23,42,0.2)] transition hover:-translate-y-0.5 sm:hidden ${
-            isInCall ? "bg-slate-950 text-white" : "bg-emerald-500 text-white"
-          }`}
+          className="call-launcher-enter fixed bottom-6 right-6 z-40 inline-flex items-center gap-2.5 rounded-full border border-slate-200 bg-white px-5 py-3.5 text-sm font-semibold text-slate-800 shadow-[0_16px_42px_rgba(15,23,42,0.16)] transition hover:-translate-y-0.5 hover:border-emerald-300 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
         >
-          <PhoneIcon className="h-4 w-4" />
-          {isInCall ? duration : "Demo call"}
+          <span className="grid h-7 w-7 place-items-center rounded-full bg-emerald-500 text-white">
+            <PhoneIcon className="h-3.5 w-3.5" />
+          </span>
+          Call Agent
         </button>
       ) : null}
 
       {!isOpen && isInCall ? (
-        <button
-          type="button"
-          onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 right-6 z-40 hidden items-center gap-3 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_14px_40px_rgba(15,23,42,0.22)] transition hover:-translate-y-0.5 sm:inline-flex"
+        <div
+          className="call-launcher-enter fixed bottom-6 right-6 z-40 flex items-center rounded-full border border-slate-700/80 bg-slate-950 p-1.5 text-white shadow-[0_18px_46px_rgba(15,23,42,0.3)]"
+          aria-label={`Agent call in progress, ${duration}`}
         >
-          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-          Demo call · {duration}
-        </button>
+          <button
+            type="button"
+            onClick={() => setIsOpen(true)}
+            aria-label={`Open active call, ${duration}`}
+            aria-controls="demo-call-drawer"
+            className="grid h-11 w-14 place-items-center rounded-full text-emerald-300 transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400"
+          >
+            <AgentPulse active={call.status === "active" && !call.isMuted} />
+          </button>
+          <span className="mx-1 h-6 w-px bg-white/15" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={call.toggleMute}
+            disabled={call.status === "connecting"}
+            aria-label={call.isMuted ? "Unmute microphone" : "Mute microphone"}
+            aria-pressed={call.isMuted}
+            title={call.isMuted ? "Unmute" : "Mute"}
+            className={`grid h-11 w-11 place-items-center rounded-full transition disabled:cursor-wait disabled:opacity-40 ${
+              call.isMuted ? "bg-amber-400/15 text-amber-300" : "text-slate-300 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            <MicrophoneIcon muted={call.isMuted} />
+          </button>
+          <button
+            type="button"
+            onClick={() => call.finishCall(true)}
+            disabled={call.status === "connecting"}
+            aria-label="End call"
+            title="End call"
+            className="grid h-11 w-11 place-items-center rounded-full text-rose-400 transition hover:bg-rose-500 hover:text-white disabled:cursor-wait disabled:opacity-40"
+          >
+            <PhoneIcon className="h-5 w-5 rotate-[135deg]" />
+          </button>
+        </div>
       ) : null}
 
       <aside
         id="demo-call-drawer"
-        aria-label="Demo call"
+        aria-label="Call agent"
         aria-hidden={!isOpen}
-        className={`clinic-theme fixed inset-y-0 right-0 z-50 flex w-full max-w-[420px] flex-col border-l border-slate-200 bg-white shadow-[-24px_0_70px_rgba(15,23,42,0.16)] transition-[transform,visibility] duration-300 ease-out ${
-          isOpen ? "visible translate-x-0" : "invisible translate-x-full"
+        className={`call-agent-drawer clinic-theme fixed inset-x-3 inset-y-3 z-50 flex flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.2)] sm:left-auto sm:w-full sm:max-w-[420px] ${
+          isOpen
+            ? "visible translate-x-0 translate-y-0 scale-100 opacity-100"
+            : "invisible translate-x-8 translate-y-4 scale-[0.96] opacity-0"
         }`}
       >
         <header className="flex items-center justify-between px-6 py-5">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-600">Browser line</p>
-            <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">Demo call</h2>
+            <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">Call agent</h2>
           </div>
           <button
             type="button"
             onClick={() => setIsOpen(false)}
-            aria-label={isInCall ? "Minimize demo call" : "Close demo call"}
+            aria-label={isInCall ? "Minimize active call" : "Close call panel"}
             className="grid h-10 w-10 place-items-center rounded-full border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
           >
-            <CloseIcon />
+            {isInCall ? <MinimizeIcon /> : <CloseIcon />}
           </button>
         </header>
 
-        {isOpen && call.status === "idle" ? (
+        {call.status === "idle" ? (
           <SetupCall
             callerNumber={callerNumber}
             setCallerNumber={setCallerNumber}
@@ -309,7 +345,7 @@ export default function DemoCall({ dark = false }) {
             startCall={call.startCall}
           />
         ) : null}
-        {isOpen && isInCall ? (
+        {isInCall ? (
           <ActiveCall
             callerNumber={callerNumber}
             withholdCallerId={withholdCallerId}
@@ -320,7 +356,7 @@ export default function DemoCall({ dark = false }) {
             finishCall={call.finishCall}
           />
         ) : null}
-        {isOpen && (call.status === "ended" || call.status === "error") ? (
+        {call.status === "ended" || call.status === "error" ? (
           <FinishedCall
             callId={call.callId}
             error={call.error}
