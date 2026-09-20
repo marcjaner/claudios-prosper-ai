@@ -203,17 +203,32 @@ const toFlowNodes = (graph) =>
     },
   }));
 
+// A transition only gets a label when it actually gates on data. The common
+// "no requirement" case stays unlabelled — otherwise every edge carries a "sin
+// requisitos" pill and, where edges cross, they stack unreadably on top of each
+// other. The requirement itself is always editable from the edge inspector.
+const edgeLabel = (requires) => (requires.length ? requires.join(", ") : undefined);
+
+const EDGE_VISUAL = {
+  labelStyle: { fill: "#475569", fontSize: 11, fontWeight: 600 },
+  labelBgStyle: { fill: "#ffffff", stroke: "#e2e8f0" },
+  labelBgPadding: [8, 4],
+  labelBgBorderRadius: 8,
+  style: { stroke: "#94a3b8" },
+};
+
 const toFlowEdges = (graph) =>
-  graph.edges.map((edge) => ({
-    id: nextEdgeId(),
-    source: edge.from,
-    target: edge.to,
-    label: (edge.requires ?? []).join(", ") || "sin requisitos",
-    data: { requires: edge.requires ?? [] },
-    labelStyle: { fill: "#475569", fontSize: 11 },
-    labelBgStyle: { fill: "#ffffff" },
-    style: { stroke: "#94a3b8" },
-  }));
+  graph.edges.map((edge) => {
+    const requires = edge.requires ?? [];
+    return {
+      id: nextEdgeId(),
+      source: edge.from,
+      target: edge.to,
+      label: edgeLabel(requires),
+      data: { requires },
+      ...EDGE_VISUAL,
+    };
+  });
 
 export default function Builder() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -247,11 +262,9 @@ export default function Builder() {
           {
             ...connection,
             id: nextEdgeId(),
-            label: "sin requisitos",
+            label: edgeLabel([]),
             data: { requires: [] },
-            labelStyle: { fill: "#475569", fontSize: 11 },
-            labelBgStyle: { fill: "#ffffff" },
-            style: { stroke: "#94a3b8" },
+            ...EDGE_VISUAL,
           },
           current,
         ),
@@ -268,7 +281,7 @@ export default function Builder() {
     setEdges((current) =>
       current.map((edge) =>
         edge.id === id
-          ? { ...edge, data: { requires }, label: requires.join(", ") || "sin requisitos" }
+          ? { ...edge, data: { requires }, label: edgeLabel(requires) }
           : edge,
       ),
     );
