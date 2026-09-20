@@ -32,14 +32,14 @@ PYTHONPATH=src uv run python -m agent
 Each call runs Deepgram STT, guarded end-of-turn detection, the booking agent
 with the Prosper clinic tools, and TTS. The launcher prints the selected port;
 it uses `PORT`, then the first free Conductor workspace port, then the first
-free port starting at `7860`. The call tester is at `/` and the observability
-console at `/app` on that address.
+free port starting at `7860`. The observability console is at `/` on that
+address.
 
 ## Production deployment (Railway)
 
 The repository contains a Docker deployment that builds the React console and
 serves it from the same FastAPI process as the call WebSocket. This keeps the
-public endpoint, `/ws`, and dashboard at `/app/` on one origin.
+public endpoint, `/ws`, and dashboard at `/` on one origin.
 
 1. Create a Railway project and deploy this repository; `railway.json` selects
    the included Dockerfile.

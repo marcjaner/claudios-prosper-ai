@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from loguru import logger
 from sqlalchemy.engine import make_url
 
@@ -19,8 +18,6 @@ from storage import CallRepository, Database
 from .transport import AgentFactory, run_call
 
 WS_PATH = "/ws"
-CALL_TESTER_PATH = "/"
-CALL_TESTER_FILE = Path(__file__).resolve().parents[1] / "frontend" / "call_tester.html"
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///data/agent.db"
 DATABASE_SAMPLE_ROWS = 25
 # Overridable so a seeded fixture never lands in the weekend's real history.
@@ -118,13 +115,6 @@ def create_app(
         allow_headers=["*"],
     )
 
-    @app.get(CALL_TESTER_PATH, include_in_schema=False)
-    async def call_tester() -> FileResponse:
-        # This page is deliberately served by the call server. Its WebSocket
-        # therefore follows the exact same path as Twilio, with no proxy or
-        # browser-only backend to keep in sync.
-        return FileResponse(CALL_TESTER_FILE)
-
     @app.get("/api/debug/database", include_in_schema=False)
     async def database_snapshot() -> dict[str, Any]:
         return await asyncio.to_thread(read_database_snapshot)
@@ -147,6 +137,5 @@ def create_app(
         except Exception:  # noqa: BLE001 - never let one call escape into the server
             logger.exception("unhandled error serving call")
 
-    # The call tester owns /, so the console is mounted under /app.
     register_dashboard(app)
     return app

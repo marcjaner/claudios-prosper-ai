@@ -146,10 +146,10 @@ def register_dashboard(app: FastAPI) -> None:
         except Exception:  # noqa: BLE001 - one dashboard tab is not the server
             logger.exception("live dashboard socket failed")
 
-    # Mounted at /app, not /: a root mount matches everything and shadows
-    # /health and /ws the moment route ordering shifts.
+    # This is registered after the API, health, and WebSocket routes, so those
+    # routes keep precedence while the dashboard owns the root path.
     if DASHBOARD_DIST.exists():
-        app.mount("/app", StaticFiles(directory=DASHBOARD_DIST, html=True), name="app")
+        app.mount("/", StaticFiles(directory=DASHBOARD_DIST, html=True), name="dashboard")
 
 
 def _message(item) -> dict:
