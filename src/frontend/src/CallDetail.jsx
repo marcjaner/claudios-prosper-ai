@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 
 import AgentActions from "./AgentActionGraph.jsx";
+import { StaffBadge } from "./History.jsx";
 import StageTrace from "./StageTrace.jsx";
 import Transcript from "./Transcript.jsx";
 import { getActionReason } from "./agentGraph.js";
 import { outcomeStyle } from "./outcomes.js";
+import { useOperatorLine } from "./useOperatorLine.js";
 
 const timeFormat = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "short",
@@ -31,30 +33,39 @@ function formatDuration(call) {
 
 const PILL = "rounded-full px-3 py-1.5 text-xs font-semibold shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2";
 
-// Transferring posts an escalation record to the platform and ends the call,
-// so it takes a second click: the first only reveals the confirmation.
-function TransferButton({ callId, closed }) {
-  const [status, setStatus] = useState("idle");
+const LINE_LABELS = {
+  connecting: "Connecting your microphone…",
+  handoff: "The agent is handing the call over…",
+  live: "You are on the line",
+};
 
-  const transfer = async () => {
-    setStatus("transferring");
-    try {
-      const response = await fetch(`/api/calls/${encodeURIComponent(callId)}/escalate`, { method: "POST" });
-      if (!response.ok) throw new Error("transfer failed");
-      setStatus("done");
-    } catch {
-      setStatus("error");
-    }
-  };
+// Transferring takes the agent off the call and puts this browser's microphone
+// on it, so it takes a second click: the first only reveals the confirmation.
+function TransferButton({ callId, heldElsewhere }) {
+  const [confirming, setConfirming] = useState(false);
+  const { phase, start, hangUp } = useOperatorLine(callId);
 
-  if (status === "done") return <span className={`${PILL} bg-violet-100 text-violet-800 shadow-none`}>Transferred to staff</span>;
-  if (status === "confirm") {
+  if (phase === "ended") return <span className={`${PILL} bg-violet-100 text-violet-800 shadow-none`}>Transferred to staff</span>;
+  if (phase in LINE_LABELS) {
     return (
       <span className="flex items-center gap-2">
-        <button type="button" onClick={transfer} className={`${PILL} bg-violet-600 text-white hover:bg-violet-700 focus-visible:outline-violet-600`}>
+        <span className={`${PILL} flex items-center gap-2 bg-amber-100 text-amber-800 shadow-none`}>
+          <span className={`inline-block h-2 w-2 rounded-full bg-amber-500 ${phase === "live" ? "animate-pulse" : ""}`} />
+          {LINE_LABELS[phase]}
+        </span>
+        <button type="button" onClick={hangUp} className={`${PILL} bg-rose-600 text-white hover:bg-rose-700 focus-visible:outline-rose-600`}>
+          End call
+        </button>
+      </span>
+    );
+  }
+  if (confirming) {
+    return (
+      <span className="flex items-center gap-2">
+        <button type="button" onClick={() => { setConfirming(false); start(); }} className={`${PILL} bg-violet-600 text-white hover:bg-violet-700 focus-visible:outline-violet-600`}>
           Confirm transfer
         </button>
-        <button type="button" onClick={() => setStatus("idle")} className={`${PILL} border border-slate-200 bg-white text-slate-600 hover:border-slate-300 focus-visible:outline-slate-500`}>
+        <button type="button" onClick={() => setConfirming(false)} className={`${PILL} border border-slate-200 bg-white text-slate-600 hover:border-slate-300 focus-visible:outline-slate-500`}>
           Cancel
         </button>
       </span>
@@ -63,12 +74,12 @@ function TransferButton({ callId, closed }) {
   return (
     <button
       type="button"
-      onClick={() => setStatus("confirm")}
-      disabled={closed || status === "transferring"}
-      title={closed ? "This call already has a recorded outcome" : "Hand the call to clinic staff: say goodbye to the caller and end the call"}
-      className={`${PILL} border border-violet-200 bg-white text-violet-700 hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-violet-600 disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-white ${closed ? "disabled:cursor-not-allowed" : "disabled:cursor-wait"}`}
+      onClick={() => setConfirming(true)}
+      disabled={heldElsewhere}
+      title={heldElsewhere ? "A colleague is already on this call" : "Take the call yourself: the agent hands over and your microphone goes live"}
+      className={`${PILL} border border-violet-200 bg-white text-violet-700 hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-violet-600 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-white`}
     >
-      {status === "transferring" ? "Transferring…" : status === "error" ? "Transfer failed · retry" : "Transfer call"}
+      {phase === "error" ? "Transfer failed · retry" : "Transfer call"}
     </button>
   );
 }
@@ -129,10 +140,11 @@ export default function CallDetail({ callId, liveCall, liveEvents, returnTo }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {live && <TransferButton key={callId} callId={callId} closed={Boolean(call.outcome)} />}
+          {live && <TransferButton key={callId} callId={callId} heldElsewhere={call.state === "operator"} />}
           <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${live ? "bg-emerald-100 text-emerald-800" : "bg-slate-200/70 text-slate-600"}`}>
             {live ? "In progress" : "Completed"}
           </span>
+          {call.handled_by === "operator" && <StaffBadge className="px-3 py-1.5" />}
           {style && (
             <span className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">
               <span style={{ backgroundColor: style.color }} className="h-1.5 w-1.5 rounded-full" />

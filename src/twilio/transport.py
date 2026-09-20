@@ -20,6 +20,7 @@ from observability import emit, update_call
 from .handshake import CallMeta, read_handshake
 from .recording import create_call_artifacts
 from .serializer import create_serializer
+from .takeover import AgentMute, OperatorBridge
 
 PIPELINE_SAMPLE_RATE = 16_000
 TTS_SAMPLE_RATE = 24_000
@@ -31,6 +32,12 @@ MAX_CALL_SECONDS = 720
 # Builds the processors between transport input and output: STT, turn
 # detection, the agent, TTS. Called once per call; nothing it returns is shared.
 AgentFactory = Callable[[CallMeta], Awaitable[Sequence[FrameProcessor]]]
+
+
+@dataclass
+class ActiveCall:
+    worker: PipelineWorker
+    bridge: OperatorBridge
 
 
 @dataclass
@@ -122,7 +129,7 @@ async def run_call(
     build_agent: AgentFactory,
     *,
     initial_greeting: str | None = None,
-    active_workers: dict[str, PipelineWorker] | None = None,
+    active_calls: dict[str, ActiveCall] | None = None,
 ) -> None:
     await websocket.accept()
 
@@ -156,11 +163,14 @@ async def run_call(
         transport = create_transport(websocket, meta)
         agent = await build_agent(meta)
         artifacts = create_call_artifacts(meta)
+        bridge = OperatorBridge()
         # After transport.output(), where both directions of audio pass.
         pipeline = Pipeline(
             [
                 transport.input(),
+                bridge,
                 *agent,
+                AgentMute(bridge),
                 OutboundAudioTap(metrics),
                 transport.output(),
                 *([artifacts.recorder] if artifacts else []),
@@ -179,8 +189,8 @@ async def run_call(
         )
         if artifacts:
             artifacts.attach_turn_tracker(worker.turn_tracking_observer)
-        if active_workers is not None:
-            active_workers[meta.call_id] = worker
+        if active_calls is not None:
+            active_calls[meta.call_id] = ActiveCall(worker, bridge)
 
         # Nothing tears the pipeline down when the caller hangs up. Without
         # this the worker lives until the idle timeout, holding a socket and a
@@ -202,8 +212,11 @@ async def run_call(
         failure = str(error)
         logger.exception("call failed | call_id={}", meta.call_id)
     finally:
-        if active_workers is not None and active_workers.get(meta.call_id) is worker:
-            active_workers.pop(meta.call_id, None)
+        if active_calls is not None and (
+            (active := active_calls.get(meta.call_id)) is not None
+            and active.worker is worker
+        ):
+            active_calls.pop(meta.call_id, None)
         if artifacts:
             await artifacts.finish(outcome, metrics.summary())
         metrics.log()

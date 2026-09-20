@@ -40,10 +40,25 @@ const RENDERED = new Set([
   "error",
   "guardrail_breach",
   "llm_call",
+  "operator_takeover",
 ]);
 
 function GuardrailBreach({ event }) {
   return <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">Safety rule breach: {event.payload.reason}</div>;
+}
+
+// Once staff hold the line nothing is transcribed, so the hand-over has to be
+// visible or the conversation looks like it simply stopped.
+function TakeoverDivider() {
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <span className="h-px flex-1 bg-amber-200" />
+      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+        Clinic staff took over the call
+      </span>
+      <span className="h-px flex-1 bg-amber-200" />
+    </div>
+  );
 }
 
 function offset(event, startedAt) {
@@ -158,7 +173,11 @@ export default function Transcript({ events: incoming, startedAt, live }) {
               {offset(event, startedAt)}
             </span>
             <div className="min-w-0 flex-1">
-              {event.kind === "guardrail_breach" ? <GuardrailBreach event={event} /> : speaker ? (
+              {event.kind === "guardrail_breach" ? (
+                <GuardrailBreach event={event} />
+              ) : event.kind === "operator_takeover" ? (
+                <TakeoverDivider />
+              ) : speaker ? (
                 <div className={`rounded-xl px-3.5 py-3 ${event.kind === "tts" ? "bg-emerald-50" : "bg-slate-50"}`}>
                   <p className={`mb-1 text-xs font-medium ${speaker.tone}`}>{speaker.who}</p>
                   <p className={`break-words leading-relaxed ${event.kind === "stt_partial" ? "text-slate-400 italic" : "text-slate-700"}`}>

@@ -30,17 +30,28 @@ function StatTile({ label, value, unit, hint }) {
   );
 }
 
+export function StaffBadge({ className = "" }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 ${className}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+      Staff took over
+    </span>
+  );
+}
+
 function OutcomeCell({ call }) {
+  const staff = call.handled_by === "operator";
   if (!call.outcome) {
-    return <span className="text-slate-400">—</span>;
+    return staff ? <StaffBadge /> : <span className="text-slate-400">—</span>;
   }
   const style = outcomeStyle(call.outcome);
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="inline-flex flex-wrap items-center gap-1.5">
       {call.guardrail_breached && <span title="Guardrail breached" className="text-amber-400">⚠</span>}
       <span style={{ backgroundColor: style.color }} className="h-2 w-2 rounded-full" />
       <span className="font-medium text-slate-700">{style.label}</span>
       {call.reason && <span className="text-xs text-slate-400">{call.reason}</span>}
+      {staff && <StaffBadge className="ml-1" />}
     </span>
   );
 }
@@ -287,7 +298,11 @@ export default function History() {
                 onClick={() => {
                   window.location.hash = `#/call/${call.call_id}?from=history`;
                 }}
-                className="cursor-pointer transition-colors hover:bg-emerald-50/50"
+                className={`cursor-pointer transition-colors ${
+                  call.handled_by === "operator"
+                    ? "bg-amber-50/60 shadow-[inset_3px_0_0_0_#f59e0b] hover:bg-amber-50"
+                    : "hover:bg-emerald-50/50"
+                }`}
               >
                 <td className="whitespace-nowrap px-5 py-4 text-xs tabular-nums text-slate-500">
                   {timeFormat.format(new Date(call.started_at * 1000))}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import WallOverview from "./WallOverview.jsx";
 import { alertReason } from "./alertReason.js";
+import { useOperatorLine } from "./useOperatorLine.js";
 
 // Every call is cut off at ten minutes, so duration is a countdown.
 const CALL_LIMIT_SECONDS = 600;
@@ -12,6 +13,7 @@ const STATE_LABELS = {
   speaking: "speaking",
   listening: "listening",
   thinking: "thinking",
+  operator: "staff on the line",
   stopping: "stopping",
   ended: "completed",
   lost: "disconnected",
@@ -95,6 +97,7 @@ function parseScoreJson(raw) {
 }
 
 function currentAction(events, call) {
+  if (call.state === "operator") return "Clinic staff on the line";
   const pending = new Map();
   let stage = null;
   for (const event of events) {
@@ -114,16 +117,74 @@ function currentAction(events, call) {
   return "Listening to the caller";
 }
 
+function OperatorFooter({ phase, onHangUp }) {
+  return (
+    <div className="mt-4 flex items-center justify-between gap-3 border-t border-amber-200 pt-4">
+      <p className="flex items-center gap-2 text-xs font-medium text-amber-800">
+        <span className={`inline-block h-2 w-2 rounded-full bg-amber-500 ${phase === "live" ? "animate-pulse" : ""}`} />
+        {phase === "live"
+          ? "You are speaking with the caller"
+          : phase === "handoff"
+            ? "The agent is handing the call over…"
+            : "Connecting your microphone…"}
+      </p>
+      <button
+        type="button"
+        onClick={onHangUp}
+        className="shrink-0 rounded-full bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
+      >
+        End call
+      </button>
+    </div>
+  );
+}
+
+function AlertFooter({ reason, stopStatus, linePhase, onStop, onTakeOver }) {
+  const message = stopStatus === "error"
+    ? "The agent could not be stopped"
+    : linePhase === "error"
+      ? "Could not connect your microphone"
+      : reason;
+  return (
+    <div className="mt-4 flex items-center justify-between gap-3 border-t border-rose-200 pt-4">
+      <p className="min-w-0 text-xs font-medium text-rose-700 line-clamp-2" title={message}>{message}</p>
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onStop}
+          disabled={stopStatus === "stopping"}
+          className="rounded-full border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 shadow-sm transition-colors hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
+        >
+          {stopStatus === "stopping" ? "Stopping…" : "Stop agent"}
+        </button>
+        <button
+          type="button"
+          onClick={onTakeOver}
+          className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
+        >
+          Take over
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CallCard({ call, events, now }) {
   const [stopStatus, setStopStatus] = useState("idle");
+  const { phase: linePhase, start: takeOver, hangUp } = useOperatorLine(call.call_id);
   const live = !call.ended_at;
   const seconds = (live ? now : call.ended_at) - call.started_at;
   const state = STATE_LABELS[call.state] ?? call.state ?? "—";
   const score = parseScoreJson(call.score_json);
   const turnCount = score?.turn_count ?? 0;
   const hasScore = typeof call.score_overall === "number";
-  const alert = Boolean(call.guardrail_breached) || (live && turnCount >= 2 && hasScore && call.score_overall < 40);
+  // This tab holds the line, or another one does; either way the agent is out.
+  const onLine = live && linePhase !== "idle" && linePhase !== "ended" && linePhase !== "error";
+  const heldElsewhere = live && !onLine && call.state === "operator";
+  const worrying = Boolean(call.guardrail_breached) || (turnCount >= 2 && hasScore && call.score_overall < 40);
+  const alert = live && !onLine && !heldElsewhere && worrying;
   const reason = alert ? alertReason(call, score) ?? "Clinic staff should review this call" : null;
+  const staff = onLine || heldElsewhere || call.handled_by === "operator";
   const action = live ? currentAction(events, call) : "Call completed";
   const callerName = call.patient_name ?? call.from_number ?? "Incoming call";
   const callerDetail = call.patient_name
@@ -149,7 +210,9 @@ function CallCard({ call, events, now }) {
       className={`flex h-full flex-col rounded-[20px] border p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-[border-color,box-shadow] hover:border-slate-300 hover:shadow-md ${
         alert
           ? "border-rose-300 bg-rose-50 ring-1 ring-rose-200"
-          : `bg-white ${live ? "border-slate-200" : "border-slate-200 opacity-70"}`
+          : onLine || heldElsewhere
+            ? "border-amber-300 bg-amber-50 ring-1 ring-amber-200"
+            : `bg-white ${live ? "border-slate-200" : "border-slate-200 opacity-70"}`
       }`}
     >
       <a href={`#/call/${call.call_id}?from=wall`} className="flex flex-1 flex-col rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600">
@@ -165,11 +228,15 @@ function CallCard({ call, events, now }) {
                   {callerDetail}
                 </p>
               </div>
-              {live && (
+              {(live || staff) && (
                 <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                  alert ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-700"
+                  staff
+                    ? "bg-amber-100 text-amber-800"
+                    : alert
+                      ? "bg-rose-100 text-rose-700"
+                      : "bg-emerald-50 text-emerald-700"
                 }`}>
-                  {alert ? "Needs attention" : "On track"}
+                  {staff ? (live ? "Staff on call" : "Staff took over") : alert ? "Needs attention" : "On track"}
                 </span>
               )}
             </div>
@@ -179,25 +246,25 @@ function CallCard({ call, events, now }) {
             </p>
           </div>
         </div>
-        <div className={`mt-4 rounded-xl px-3.5 py-3 ${alert ? "bg-white/70" : "bg-slate-50"}`}>
+        <div className={`mt-4 rounded-xl px-3.5 py-3 ${alert || onLine || heldElsewhere ? "bg-white/70" : "bg-slate-50"}`}>
           <p className="text-xs text-slate-400">Current task</p>
           <p className="mt-0.5 truncate text-sm font-semibold text-slate-700">{action}</p>
         </div>
       </a>
-      {alert && live && (
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-rose-200 pt-4">
-          <p className="min-w-0 text-xs font-medium text-rose-700 line-clamp-2" title={reason}>
-            {stopStatus === "error" ? "The agent could not be stopped" : reason}
-          </p>
-          <button
-            type="button"
-            onClick={stopAgent}
-            disabled={stopStatus === "stopping"}
-            className="shrink-0 rounded-full bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-rose-700 disabled:cursor-wait disabled:bg-rose-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
-          >
-            {stopStatus === "stopping" ? "Stopping…" : "Stop agent"}
-          </button>
-        </div>
+      {onLine && <OperatorFooter phase={linePhase} onHangUp={hangUp} />}
+      {heldElsewhere && (
+        <p className="mt-4 border-t border-amber-200 pt-4 text-xs font-medium text-amber-800">
+          A colleague is on this call
+        </p>
+      )}
+      {alert && (
+        <AlertFooter
+          reason={reason}
+          stopStatus={stopStatus}
+          linePhase={linePhase}
+          onStop={stopAgent}
+          onTakeOver={takeOver}
+        />
       )}
     </article>
   );

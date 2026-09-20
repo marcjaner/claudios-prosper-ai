@@ -103,7 +103,7 @@ def create_app(
                 await guardrail_database.close()
 
     app = FastAPI(lifespan=lifespan)
-    app.state.active_workers = {}
+    app.state.active_calls = {}
 
     # For the Vite dev server only. This has nothing to do with
     # FastAPIWebsocketParams(allowed_origins=[]), which guards the Twilio
@@ -132,7 +132,7 @@ def create_app(
                 websocket,
                 build_agent,
                 initial_greeting=initial_greeting,
-                active_workers=app.state.active_workers,
+                active_calls=app.state.active_calls,
             )
         except Exception:  # noqa: BLE001 - never let one call escape into the server
             logger.exception("unhandled error serving call")

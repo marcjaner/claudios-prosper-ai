@@ -109,12 +109,12 @@ def register_dashboard(app: FastAPI) -> None:
 
     @app.post("/api/calls/{call_id}/stop")
     async def stop_call(request: Request, call_id: str) -> dict:
-        worker = request.app.state.active_workers.get(call_id)
-        if worker is None:
+        active = request.app.state.active_calls.get(call_id)
+        if active is None:
             raise HTTPException(status_code=409, detail="call is no longer active")
         emit(call_id, "operator_stop", {})
         update_call(call_id, state="stopping")
-        await worker.cancel(reason="stopped by operator")
+        await active.worker.cancel(reason="stopped by operator")
         return {"status": "stopping", "call_id": call_id}
 
     @app.websocket("/api/live")
