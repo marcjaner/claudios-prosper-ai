@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addEdge,
   Background,
@@ -10,6 +10,8 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+
+import { PromptActions, RevisionPanel, SparklesIcon, ValidationPanel } from "./PromptReview.jsx";
 
 // Fact keys are edited as free text, so the same splitter serves every list field.
 // It runs when editing finishes, never per keystroke: splitting as you type eats
@@ -230,6 +232,41 @@ const toFlowEdges = (graph) =>
     };
   });
 
+const serializeGraph = (entry, system, nodes, edges) => ({
+  entry,
+  system,
+  nodes: nodes.map((node) => ({
+    id: node.id,
+    prompt: node.data.prompt,
+    tools: node.data.tools,
+    clears: node.data.clears,
+    position: node.position,
+  })),
+  edges: edges.map((edge) => ({
+    from: edge.source,
+    to: edge.target,
+    requires: edge.data?.requires ?? [],
+  })),
+});
+
+const semanticFingerprint = (graph) => JSON.stringify({
+  entry: graph.entry,
+  system: graph.system,
+  nodes: graph.nodes.map(({ id, prompt, tools, clears }) => ({ id, prompt, tools, clears })),
+  edges: graph.edges,
+});
+
+const postJson = async (url, payload) => {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.detail ?? "No se pudo completar la revisión.");
+  return body;
+};
+
 export default function Builder() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -243,6 +280,11 @@ export default function Builder() {
   const [draftKeys, setDraftKeys] = useState(null);
   // The stage name reads as a title; editing is opt-in behind the pencil.
   const [editingName, setEditingName] = useState(false);
+  const [aiJob, setAiJob] = useState("");
+  const [aiError, setAiError] = useState("");
+  const [revision, setRevision] = useState(null);
+  const [report, setReport] = useState(null);
+  const [validatedFingerprint, setValidatedFingerprint] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -287,6 +329,78 @@ export default function Builder() {
           : edge,
       ),
     );
+
+  const graphPayload = useMemo(
+    () => serializeGraph(entry, system, nodes, edges),
+    [entry, system, nodes, edges],
+  );
+  const graphFingerprint = useMemo(() => semanticFingerprint(graphPayload), [graphPayload]);
+
+  const improve = async (stageId = null) => {
+    const original = stageId !== null
+      ? nodes.find((item) => item.id === stageId)?.data.prompt ?? ""
+      : system;
+    setAiJob(`improve:${stageId ?? "system"}`);
+    setAiError("");
+    try {
+      const result = await postJson("/api/prompts/improve", {
+        graph: graphPayload,
+        stage_id: stageId,
+      });
+      setRevision({ ...result, stageId, original });
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : "No se pudo generar la propuesta.");
+    } finally {
+      setAiJob("");
+    }
+  };
+
+  const validate = async (scope, stageId = null) => {
+    const fingerprint = graphFingerprint;
+    setAiJob(`validate:${stageId ?? scope}`);
+    setAiError("");
+    try {
+      const result = await postJson("/api/graph/validate", {
+        graph: graphPayload,
+        scope,
+        stage_id: stageId,
+      });
+      setReport({ ...result, scope, stageId });
+      setValidatedFingerprint(fingerprint);
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : "No se pudo completar la validación.");
+    } finally {
+      setAiJob("");
+    }
+  };
+
+  const applyRevision = () => {
+    if (!revision) return;
+    const currentPrompt = revision.stageId !== null
+      ? nodes.find((item) => item.id === revision.stageId)?.data.prompt
+      : system;
+    if (currentPrompt !== revision.original) {
+      setAiError("El texto cambió después de generar esta propuesta. Vuelve a mejorar la versión actual.");
+      return;
+    }
+    if (revision.stageId !== null) patchNode(revision.stageId, { prompt: revision.revised_prompt });
+    else setSystem(revision.revised_prompt);
+    setRevision(null);
+  };
+
+  const navigateToSource = (source) => {
+    if (source.kind === "system") {
+      setSelected(null);
+      return;
+    }
+    if (source.kind === "stage") {
+      setSelected({ kind: "node", id: source.id });
+      return;
+    }
+    const [from, to] = source.id.split("->");
+    const target = edges.find((item) => item.source === from && item.target === to);
+    if (target) setSelected({ kind: "edge", id: target.id });
+  };
 
   const renameStage = (from, to) => {
     const trimmed = to.trim();
@@ -344,26 +458,10 @@ export default function Builder() {
   };
 
   const save = async () => {
-    const payload = {
-      entry,
-      system,
-      nodes: nodes.map((node) => ({
-        id: node.id,
-        prompt: node.data.prompt,
-        tools: node.data.tools,
-        clears: node.data.clears,
-        position: node.position,
-      })),
-      edges: edges.map((edge) => ({
-        from: edge.source,
-        to: edge.target,
-        requires: edge.data?.requires ?? [],
-      })),
-    };
     const response = await fetch("/api/graph", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(graphPayload),
     });
     const body = await response.json();
     setStatus(response.ok ? "guardado" : `rechazado: ${body.detail}`);
@@ -388,6 +486,14 @@ export default function Builder() {
             className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition-colors hover:border-slate-300 disabled:opacity-40"
           >
             Eliminar
+          </button>
+          <button
+            onClick={() => validate("agent")}
+            disabled={Boolean(aiJob)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-wait disabled:opacity-50"
+          >
+            <SparklesIcon />
+            {aiJob.startsWith("validate") ? "Validando…" : "Validar agente"}
           </button>
           <button
             onClick={save}
@@ -434,12 +540,31 @@ export default function Builder() {
       </div>
 
       <aside className="w-96 overflow-y-auto border-l border-slate-200 bg-white p-5">
+        <div aria-live="polite">
+          {aiJob && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 text-xs font-medium text-emerald-700">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+              {aiJob.startsWith("improve") ? "Preparando una propuesta…" : "Revisando instrucciones y flujo…"}
+            </div>
+          )}
+          {aiError && (
+            <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">{aiError}</div>
+          )}
+        </div>
+        {report && (
+          <ValidationPanel
+            report={report}
+            isStale={validatedFingerprint !== graphFingerprint}
+            onClose={() => setReport(null)}
+            onNavigate={navigateToSource}
+          />
+        )}
         {!selected && (
           <div className="space-y-4">
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div>
+              <label htmlFor="system-prompt" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Instrucciones generales
-              </span>
+              </label>
               <textarea
                 id="system-prompt"
                 value={system}
@@ -452,7 +577,20 @@ export default function Builder() {
                 Va delante de las instrucciones de cada etapa, en todas las llamadas. Las etapas
                 dicen qué hacer y cuándo; esto dice cómo.
               </span>
-            </label>
+              <PromptActions
+                busy={Boolean(aiJob)}
+                onImprove={() => improve()}
+                onValidate={() => validate("agent")}
+                validateLabel="Validar agente"
+              />
+              {revision && revision.stageId === null && (
+                <RevisionPanel
+                  revision={revision}
+                  onApply={applyRevision}
+                  onDiscard={() => setRevision(null)}
+                />
+              )}
+            </div>
             <p className="border-t border-slate-200 pt-4 text-sm text-slate-500">
               Selecciona una etapa o una transición para editarla. Arrastra de un conector a otro
               para crear una transición.
@@ -501,17 +639,30 @@ export default function Builder() {
               </div>
             )}
 
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div>
+              <label htmlFor="stage-prompt" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Qué hace en este paso
-              </span>
+              </label>
               <textarea
+                id="stage-prompt"
                 value={node.data.prompt}
                 onChange={(event) => patchNode(node.id, { prompt: event.target.value })}
                 rows={8}
                 className="clinic-control mt-1 w-full"
               />
-            </label>
+              <PromptActions
+                busy={Boolean(aiJob)}
+                onImprove={() => improve(node.id)}
+                onValidate={() => validate("stage", node.id)}
+              />
+              {revision?.stageId === node.id && (
+                <RevisionPanel
+                  revision={revision}
+                  onApply={applyRevision}
+                  onDiscard={() => setRevision(null)}
+                />
+              )}
+            </div>
 
             <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5">
               <div className="min-w-0">
